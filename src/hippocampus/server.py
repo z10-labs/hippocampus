@@ -1,0 +1,340 @@
+"""Hippocampus MCP server — codebase decision memory."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Optional
+
+from mcp.server.fastmcp import FastMCP
+
+import hippocampus.settings as settings
+from hippocampus.classify import classify
+from hippocampus.indexer import build_index, load_index
+from hippocampus.logger import (
+    apply_supersedes,
+    write_deferred_entry,
+    write_heavy_record,
+    write_standard_record,
+)
+from hippocampus.retriever import _rel_label, query
+from hippocampus.types import Relationship
+
+mcp = FastMCP("hippocampus")
+
+
+# ---------------------------------------------------------------------------
+# hippocampus_query
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def hippocampus_query(query_text: str, top_n: int = 5) -> str:
+    """Semantic search over past architectural decisions.
+
+    Call this before any non-trivial decision: choosing a library, designing a
+    schema, picking an interface, or any fork with real alternatives.
+
+    Returns ranked results with inline Why, Rejected alternatives, and
+    Depends-on so you do not need to open record files.
+    """
+    results = query(settings.ROOT, query_text, top_n)
+    if not results:
+        return "No relevant decisions found. Proceed — no past constraints apply."
+
+    lines = [f'Querying: "{query_text}"\n', "─" * 70]
+    for r in results:
+        if r.surfaced_via == "direct":
+            badge = f"[direct | score: {r.score:.3f}]"
+        else:
+            badge = f"[via {r.relationship_type} | {r.relevance_note}]"
+
+        meta = " · ".join(filter(None, [r.category, r.weight]))
+        lines.append(f"{r.id}  {badge}  ({meta})")
+        lines.append(f"  {r.title}")
+
+        if r.why:
+            short = r.why[:160] + "…" if len(r.why) > 160 else r.why
+            lines.append(f"  Why: {short}")
+
+        alts = (r.alternatives or "").strip()
+        if alts:
+            alt_lines = alts.splitlines()[:3]
+            lines.append(f"  Rejected: {alt_lines[0]}")
+            for a in alt_lines[1:]:
+                lines.append(f"            {a}")
+        else:
+            lines.append("  Rejected: (none documented)")
+
+        if r.depends_on:
+            lines.append(f"  Depends on: {', '.join(r.depends_on)}")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# hippocampus_log
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def hippocampus_log(
+    description: str,
+    weight: Optional[str] = None,
+    category: Optional[str] = None,
+    confirmed: bool = False,
+    relationships: Optional[str] = None,
+    title: Optional[str] = None,
+    why: Optional[str] = None,
+    trade_off: Optional[str] = None,
+    review_trigger: Optional[str] = None,
+) -> str:
+    """Record an architectural decision. Two-phase flow:
+
+    Phase 1 — call without confirmed=True. Returns classification and related
+    decisions as candidates for relationship linking. Read these carefully:
+    if any constrained your choice, include them in Phase 2.
+
+    Phase 2 — call again with confirmed=True and the relationships list
+    (JSON string: '[{"type":"depends-on","target":"DR-0001"}]', or '[]' for none).
+    Writes the record and updates the index.
+
+    Relationship types: depends-on | supersedes | conflicts-with
+
+    weight options: heavy | standard | deferred (omit to auto-classify)
+    category options: architectural | domain | data | security | api |
+      performance | dependency | testing | error-handling | state | naming |
+      operational | compliance | cost | team | ux-product
+    """
+    classification = classify(description)
+    if weight:
+        classification.weight = weight
+    if category:
+        classification.category = category
+
+    if classification.weight == "skip":
+        return "Implementation-level decision — not worth recording."
+
+    # Phase 1: suggest candidates
+    if not confirmed:
+        lines = [
+            f"Classification: {classification.weight} | {classification.category}",
+            f"Reason: {classification.reason}",
+            "",
+        ]
+
+        if classification.weight == "deferred":
+            lines.append("This looks like a deliberate deferral. Call again with confirmed=True to record it.")
+            return "\n".join(lines)
+
+        # Surface related decisions
+        candidates = query(settings.ROOT, description, 5)
+        direct = [r for r in candidates if r.surfaced_via == "direct" and r.score >= 0.20]
+
+        if direct:
+            lines.append("Related decisions found — if any constrained your choice, include them as relationships in Phase 2:")
+            lines.append("─" * 70)
+            for r in direct:
+                lines.append(f"  {r.id}  [score: {r.score:.3f}]  {r.title}")
+                if r.why:
+                    short = r.why[:120] + "…" if len(r.why) > 120 else r.why
+                    lines.append(f"         Why: {short}")
+            lines.append("")
+
+        lines.append("Call again with confirmed=True (and relationships=[...]) to write the record.")
+        return "\n".join(lines)
+
+    # Phase 2: write record
+    rels: list[Relationship] = []
+    if relationships:
+        try:
+            raw = json.loads(relationships)
+            rels = [Relationship(type=r["type"], target=r["target"]) for r in raw]
+        except (json.JSONDecodeError, KeyError) as e:
+            return f"Error parsing relationships JSON: {e}\nExpected: '[{{\"type\":\"depends-on\",\"target\":\"DR-0001\"}}]'"
+
+    if classification.weight == "deferred":
+        file_path = write_deferred_entry(settings.ROOT, description)
+        return f"Deferred decision recorded in: {file_path}"
+
+    if classification.weight == "heavy":
+        file_path = write_heavy_record(
+            settings.ROOT, description, classification,
+            title=title, why=why, trade_off=trade_off,
+            relationships=rels, review_trigger=review_trigger,
+        )
+    else:
+        file_path = write_standard_record(
+            settings.ROOT, description, classification,
+            title=title, why=why, trade_off=trade_off,
+            relationships=rels,
+        )
+
+    # Extract the new DR-NNNN from the written file path
+    import re
+    fname = Path(file_path).name
+    new_id_match = re.match(r'^(\d{4})-', fname)
+    new_dr_id = f"DR-{new_id_match.group(1)}" if new_id_match else "DR-????"
+
+    # Apply supersedes side-effects
+    superseded = []
+    for rel in rels:
+        if rel.type == "supersedes":
+            if apply_supersedes(settings.ROOT, new_dr_id, rel.target):
+                superseded.append(rel.target)
+
+    # Incremental reindex
+    build_index(settings.ROOT, force=False)
+
+    lines = [f"Record written: {file_path}"]
+    if superseded:
+        lines.append(f"Status updated to 'superseded by {new_dr_id}': {', '.join(superseded)}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# hippocampus_classify
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def hippocampus_classify(description: str) -> str:
+    """Classify the weight and category of a decision without writing anything.
+
+    Use this when unsure whether something is worth recording, or to preview
+    how a description will be classified before calling hippocampus_log.
+    """
+    result = classify(description)
+    record_recommended = result.weight in ("heavy", "standard")
+    lines = [
+        f"Weight: {result.weight}",
+        f"Category: {result.category or 'N/A'}",
+        f"Reason: {result.reason}",
+        f"Record recommended: {'yes' if record_recommended else 'no'}",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# hippocampus_list
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = None) -> str:
+    """List all decision records with inline Why and Depends-on.
+
+    Filter by category (e.g. 'data', 'security') or weight ('heavy', 'standard').
+    Useful for discovering relevant precedent before starting work in an unfamiliar area.
+    """
+    index = load_index(settings.ROOT)
+    entries = index.entries
+
+    if category:
+        entries = [e for e in entries if e.category.lower() == category.lower()]
+    if weight:
+        entries = [e for e in entries if e.weight.lower() == weight.lower()]
+
+    if not entries:
+        filters = ", ".join(filter(None, [
+            f"category={category}" if category else None,
+            f"weight={weight}" if weight else None,
+        ]))
+        return f"No records match{' (' + filters + ')' if filters else ''}."
+
+    filter_desc = ", ".join(filter(None, [
+        f"category={category}" if category else None,
+        f"weight={weight}" if weight else None,
+    ]))
+    header = f"Decision records{' (' + filter_desc + ')' if filter_desc else ''}:"
+    lines = [header, "─" * 70]
+
+    for e in sorted(entries, key=lambda x: x.id):
+        lines.append(f"{e.id}  ({e.category} · {e.weight})  {e.date}")
+        lines.append(f"  {e.title}")
+        if e.why:
+            short = e.why[:120] + "…" if len(e.why) > 120 else e.why
+            lines.append(f"  Why: {short}")
+        deps = [r.target for r in e.relationships if r.type == "depends-on"]
+        if deps:
+            lines.append(f"  Depends on: {', '.join(deps)}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# hippocampus_chain
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def hippocampus_chain(dr_id: str) -> str:
+    """Trace the full dependency chain from a decision record.
+
+    Recursively follows depends-on links to show the full tree of prior decisions
+    that constrain the given DR. Useful before modifying a decision that others
+    may depend on.
+
+    Example: hippocampus_chain("DR-0015")
+    """
+    dr_id = dr_id.upper()
+    index = load_index(settings.ROOT)
+    if not index.entries:
+        return "Index is empty. Run hippocampus_log or ensure .decisions/records/ exists."
+
+    by_id = {e.id: e for e in index.entries}
+
+    lines: list[str] = [f"Decision chain for {dr_id}:", ""]
+
+    def render(target_id: str, depth: int, visited: set[str]) -> None:
+        if target_id in visited:
+            return
+        visited.add(target_id)
+        entry = by_id.get(target_id)
+        indent = "  " * depth
+        marker = "▶" if depth == 0 else "└─"
+
+        if not entry:
+            lines.append(f"{indent}{marker} {target_id}  (not in index)")
+            return
+
+        lines.append(f"{indent}{marker} {entry.id}  ({entry.category} · {entry.weight})")
+        lines.append(f"{indent}   {entry.title}")
+        if entry.why:
+            short = entry.why[:100] + "…" if len(entry.why) > 100 else entry.why
+            lines.append(f"{indent}   Why: {short}")
+        alts = (entry.alternatives or "").strip()
+        if alts:
+            first = alts.splitlines()[0]
+            lines.append(f"{indent}   Rejected: {first}")
+
+        deps = [r for r in entry.relationships if r.type == "depends-on"]
+        unvisited = [d for d in deps if d.target not in visited]
+        if unvisited:
+            lines.append(f"{indent}   ─── depends on ───")
+            for dep in deps:
+                render(dep.target, depth + 1, visited)
+
+    render(dr_id, 0, set())
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Hippocampus MCP server — codebase decision memory"
+    )
+    parser.add_argument(
+        "--root",
+        default=".",
+        help="Project root directory containing .decisions/ (default: cwd)",
+    )
+    # parse_known_args so MCP internal args don't cause failures
+    args, _ = parser.parse_known_args()
+    settings.ROOT = Path(args.root).resolve()
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hippocampus-mcp"
+version = "0.2.0"
+description = "Codebase decision memory as an MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastembed>=0.4.0",
+    "numpy>=1.26.0",
+]
+
+[project.scripts]
+hippocampus-mcp = "hippocampus.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
