@@ -12,10 +12,10 @@ directly — no shell commands, no npm scripts. Decision records live in the con
 ## Development setup
 
 ```bash
-cd /Users/dzithendolabs/Documents/z10labs/hippocampus-v2
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+pytest
 ```
 
 ## Testing against another project
@@ -26,18 +26,18 @@ Add to the consuming project's `.claude/settings.json`:
 {
   "mcpServers": {
     "hippocampus": {
-      "command": "python",
-      "args": [
-        "/Users/dzithendolabs/Documents/z10labs/hippocampus-v2/src/hippocampus/server.py",
-        "--root", "."
-      ]
+      "command": "hippocampus-mcp",
+      "args": ["--root", "."]
     }
   }
 }
 ```
 
-`"."` resolves to the consuming project's root because Claude Code sets CWD there when
+`"."` resolves to the consuming project's root because the MCP host sets CWD there when
 spawning the stdio process.
+
+To point at a working copy instead of the installed package, use
+`"command": "python", "args": ["/abs/path/to/src/hippocampus/server.py", "--root", "."]`.
 
 After editing server code, start a new Claude Code session (or `/mcp` to reconnect) —
 the server is spawned fresh each session.
@@ -57,6 +57,11 @@ the server is spawned fresh each session.
 The vector index lives at `.hippocampus/index.json` in the consuming project root (gitignored).
 It is rebuilt automatically after each `hippocampus_log` call. To force a full rebuild, call
 `build_index(root, force=True)` directly or delete `.hippocampus/index.json`.
+
+## Tests
+
+`pytest` — 92% coverage. The embedding model is stubbed in `tests/conftest.py` so the suite
+runs offline and fast; the retrieval behaviour under test is the graph expansion, not the model.
 
 ## Constraints
 

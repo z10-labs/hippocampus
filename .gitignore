@@ -3,7 +3,12 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+build/
 dist/
 *.egg-info/
 .hippocampus/
+.pytest_cache/
+.coverage
+htmlcov/
 .DS_Store
+.$*.dtmp

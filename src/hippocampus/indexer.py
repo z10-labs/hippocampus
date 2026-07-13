@@ -70,15 +70,24 @@ def _records_dir(root: Path) -> Path:
 
 def _parse_relationships(content: str) -> list[Relationship]:
     section_match = re.search(r'## Relationships\n([\s\S]*?)(?:\n##|$)', content)
-    if not section_match:
-        return []
-    section = section_match.group(1)
-    results = []
-    for line in section.splitlines():
-        m = re.match(r'[-*]\s*(overrides|inferred-by|depends-on|supersedes|conflicts-with):\s*(DR-\d+)', line, re.I)
-        if m:
-            results.append(Relationship(type=m.group(1).lower(), target=m.group(2).upper()))
-    return results
+    explicit: list[Relationship] = []
+    if section_match:
+        for line in section_match.group(1).splitlines():
+            m = re.match(r'[-*]\s*(overrides|inferred-by|depends-on|supersedes|conflicts-with|references):\s*(DR-\d+)', line, re.I)
+            if m:
+                explicit.append(Relationship(type=m.group(1).lower(), target=m.group(2).upper()))
+
+    # Prose fallback: scan Why/What/Context/Decision for bare DR-NNNN mentions.
+    # Only add as 'references' if the target isn't already covered by an explicit link.
+    explicit_targets = {r.target for r in explicit}
+    body_match = re.search(r'## (?:Why|What|Context|Decision)\n([\s\S]*?)(?:\n##|$)', content)
+    prose_refs: list[Relationship] = []
+    if body_match:
+        for dr_id in dict.fromkeys(re.findall(r'\bDR-\d{4}\b', body_match.group(1))):
+            if dr_id not in explicit_targets:
+                prose_refs.append(Relationship(type='references', target=dr_id))
+
+    return explicit + prose_refs
 
 
 def _parse_why(content: str) -> str:
