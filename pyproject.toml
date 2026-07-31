@@ -20,7 +20,9 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    # Pinned below 2.0: mcp 2.0.0 relocated `mcp.server.fastmcp`, breaking install.
+    # Remove this pin when WP-12 (port to the mcp 2.x API) lands.
+    "mcp>=1.0.0,<2",
     "fastembed>=0.4.0",
     "numpy>=1.26.0",
 ]
