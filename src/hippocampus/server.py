@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -19,7 +20,7 @@ from hippocampus.logger import (
     write_standard_record,
 )
 from hippocampus.retriever import _rel_label, query
-from hippocampus.types import Relationship
+from hippocampus.types import ClassificationResult, Relationship
 
 mcp = FastMCP("hippocampus")
 
@@ -120,12 +121,75 @@ def hippocampus_query(query_text: str, top_n: int = 5) -> str:
 # hippocampus_log
 # ---------------------------------------------------------------------------
 
+# An agent that passes confirmed=True on the first call skips Phase 1
+# entirely and never sees the related-decisions list it's supposed to link
+# against — the two-phase flow was advisory, and agents optimizing for turn
+# count route around advisory steps. Phase 1 issues a token here; Phase 2
+# requires it, proving Phase 1 actually ran for this exact description.
+#
+# Random rather than a hash of the description: a hash would be a formula an
+# agent could compute without ever calling Phase 1, silently defeating the
+# point. This is a guard rail, not a security boundary, so 8 hex chars of
+# randomness is plenty — the server is a per-session stdio process, so a
+# bounded in-memory dict is enough; persistence across restarts is not
+# needed and would be a liability.
+_PHASE1_TOKEN_LIMIT = 100
+_phase1_tokens: dict[str, str] = {}  # token -> description at issue time
+
+
+def _issue_phase1_token(description: str) -> str:
+    token = secrets.token_hex(4)
+    _phase1_tokens[token] = description
+    while len(_phase1_tokens) > _PHASE1_TOKEN_LIMIT:
+        oldest = next(iter(_phase1_tokens))
+        del _phase1_tokens[oldest]
+    return token
+
+
+def _phase1_output(classification: ClassificationResult, description: str) -> str:
+    """Renders Phase 1's classification + candidates output and issues a
+    fresh token for it. Reused both for a genuine Phase 1 call and for a
+    Phase 2 call that arrives with no token or a stale one."""
+    token = _issue_phase1_token(description)
+    lines = [
+        f"Classification: {classification.weight} | {classification.category}",
+        f"Reason: {classification.reason}",
+        "",
+    ]
+
+    if classification.weight == "deferred":
+        lines.append("This looks like a deliberate deferral.")
+        lines.append(f'Call again with confirmed=True and token="{token}" to record it.')
+        return "\n".join(lines)
+
+    # Phase 1 uses its own, looser bar than the retrieval floor
+    # (retriever.MIN_DIRECT_SCORE) — a candidate worth surfacing for
+    # possible relationship linking doesn't need to clear the same noise
+    # threshold as a result shown as an established prior decision.
+    candidates = query(settings.ROOT, description, 5, min_score=0.20)
+    direct = [r for r in candidates if r.surfaced_via == "direct"]
+
+    if direct:
+        lines.append("Related decisions found — if any constrained your choice, include them as relationships in Phase 2:")
+        lines.append("─" * 70)
+        for r in direct:
+            lines.append(f"  {r.id}  [score: {r.score:.3f}]  {r.title}")
+            if r.why:
+                short = r.why[:120] + "…" if len(r.why) > 120 else r.why
+                lines.append(f"         Why: {short}")
+        lines.append("")
+
+    lines.append(f'Call again with confirmed=True, token="{token}" (and relationships=[...]) to write the record.')
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def hippocampus_log(
     description: str,
     weight: Optional[str] = None,
     category: Optional[str] = None,
     confirmed: bool = False,
+    token: Optional[str] = None,
     relationships: Optional[str] = None,
     title: Optional[str] = None,
     why: Optional[str] = None,
@@ -136,12 +200,21 @@ def hippocampus_log(
     """Record an architectural decision. Two-phase flow:
 
     Phase 1 — call without confirmed=True. Returns classification and related
-    decisions as candidates for relationship linking. Read these carefully:
-    if any constrained your choice, include them in Phase 2.
+    decisions as candidates for relationship linking, plus a token. Read the
+    candidates carefully: if any constrained your choice, include them in
+    Phase 2.
 
-    Phase 2 — call again with confirmed=True and the relationships list
-    (JSON string: '[{"type":"depends-on","target":"DR-0001"}]', or '[]' for none).
-    Writes the record and updates the index.
+    Phase 2 — call again with confirmed=True, the token from Phase 1, and the
+    relationships list (JSON string: '[{"type":"depends-on","target":"DR-0001"}]',
+    or '[]' for none). Writes the record and updates the index.
+
+    The token proves Phase 1 actually ran for this exact description before
+    anything gets written. confirmed=True with no token, or with a token
+    issued for a different (or since-edited) description, does not write —
+    it returns Phase 1's output again, with a fresh token, instead. This is
+    deliberate: an agent that logs a decision with no Why produces a record
+    worth nothing, and Phase 1's related-decisions list is the mechanism for
+    catching that before it's written, not an optional courtesy.
 
     Relationship types: depends-on | supersedes | conflicts-with
 
@@ -175,38 +248,23 @@ def hippocampus_log(
     if classification.weight == "skip":
         return "Implementation-level decision — not worth recording."
 
-    # Phase 1: suggest candidates
+    # Phase 1: suggest candidates and issue a token
     if not confirmed:
-        lines = [
-            f"Classification: {classification.weight} | {classification.category}",
-            f"Reason: {classification.reason}",
-            "",
-        ]
+        return _phase1_output(classification, description)
 
-        if classification.weight == "deferred":
-            lines.append("This looks like a deliberate deferral. Call again with confirmed=True to record it.")
-            return "\n".join(lines)
+    # Phase 2: the token must prove Phase 1 actually ran for this exact
+    # description. No token, an unrecognized one, or one issued for
+    # different text (edited since Phase 1) — regenerate Phase 1's output
+    # (with a fresh token) instead of writing anything.
+    if token is None or _phase1_tokens.get(token) != description:
+        reason = (
+            "Phase 2 requires the token from Phase 1 — none was supplied."
+            if token is None
+            else "That token doesn't match this description — it may have changed since Phase 1, or the token expired."
+        )
+        return f"{reason}\n\n{_phase1_output(classification, description)}"
 
-        # Surface related decisions
-        # Phase 1 uses its own, looser bar than the retrieval floor
-        # (retriever.MIN_DIRECT_SCORE) — a candidate worth surfacing for
-        # possible relationship linking doesn't need to clear the same noise
-        # threshold as a result shown as an established prior decision.
-        candidates = query(settings.ROOT, description, 5, min_score=0.20)
-        direct = [r for r in candidates if r.surfaced_via == "direct"]
-
-        if direct:
-            lines.append("Related decisions found — if any constrained your choice, include them as relationships in Phase 2:")
-            lines.append("─" * 70)
-            for r in direct:
-                lines.append(f"  {r.id}  [score: {r.score:.3f}]  {r.title}")
-                if r.why:
-                    short = r.why[:120] + "…" if len(r.why) > 120 else r.why
-                    lines.append(f"         Why: {short}")
-            lines.append("")
-
-        lines.append("Call again with confirmed=True (and relationships=[...]) to write the record.")
-        return "\n".join(lines)
+    _phase1_tokens.pop(token, None)  # single-use
 
     # Phase 2: write record
     rels: list[Relationship] = []

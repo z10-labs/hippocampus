@@ -2,6 +2,7 @@
 MCP host reaches, minus the transport."""
 import json
 import os
+import re
 
 import pytest
 
@@ -23,6 +24,18 @@ from conftest import write_record
 def point_server_at_tmp_root(root, monkeypatch):
     monkeypatch.setattr(settings, "ROOT", root)
     return root
+
+
+def log_confirmed(description, weight=None, category=None, **phase2_kwargs):
+    """Drives the real two-phase flow (WP-10): Phase 1 to obtain a token,
+    then Phase 2 with confirmed=True and that token. Most tests only care
+    about Phase 2's outcome, so this is the standard way to reach it."""
+    phase1_out = log_tool(description, weight=weight, category=category)
+    token = re.search(r'token="([^"]+)"', phase1_out).group(1)
+    return log_tool(
+        description, weight=weight, category=category,
+        confirmed=True, token=token, **phase2_kwargs,
+    )
 
 
 # --- query ---------------------------------------------------------------
@@ -107,9 +120,8 @@ def test_query_flags_a_superseded_record_on_its_own_id_line(root):
     write_record(root, "0001", "Redis Streams for events")
     build_index(root, force=True)
 
-    log_tool(
+    log_confirmed(
         "Kafka for events",
-        confirmed=True,
         relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
         alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
     )
@@ -211,10 +223,67 @@ def test_log_phase_one_surfaces_related_records_as_link_candidates(root):
     assert "DR-0001" in out
 
 
+# --- two-phase enforcement (WP-10) ------------------------------------------
+
+def test_confirmed_true_with_no_token_writes_nothing_and_returns_phase_one(root):
+    out = log_tool("sliding window rate limiter", confirmed=True)
+
+    assert "token" in out.lower()
+    assert "Classification:" in out  # Phase 1 content, regenerated
+    assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_phase_one_then_phase_two_with_the_returned_token_writes_the_record(root):
+    phase1_out = log_tool("sliding window rate limiter", weight="standard")
+    token = re.search(r'token="([^"]+)"', phase1_out).group(1)
+
+    out = log_tool("sliding window rate limiter", weight="standard", confirmed=True, token=token)
+
+    assert "Record written" in out
+    assert len(list((root / ".decisions" / "records").iterdir())) == 1
+
+
+def test_a_stale_token_for_a_changed_description_is_rejected(root):
+    phase1_out = log_tool("sliding window rate limiter", weight="standard")
+    token = re.search(r'token="([^"]+)"', phase1_out).group(1)
+
+    # Description edited after Phase 1 — the token was issued for different text.
+    out = log_tool("sliding window rate limiter v2", weight="standard", confirmed=True, token=token)
+
+    assert "doesn't match" in out
+    assert "Classification:" in out  # regenerated Phase 1 content, not written
+    assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_an_unrecognized_token_is_rejected(root):
+    out = log_tool("sliding window rate limiter", weight="standard", confirmed=True, token="not-a-real-token")
+
+    assert "doesn't match" in out
+    assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_a_token_is_single_use(root):
+    phase1_out = log_tool("sliding window rate limiter", weight="standard")
+    token = re.search(r'token="([^"]+)"', phase1_out).group(1)
+
+    log_tool("sliding window rate limiter", weight="standard", confirmed=True, token=token)
+    # Reusing the same token for a second, distinct decision must not work.
+    out = log_tool("a completely different decision", weight="standard", confirmed=True, token=token)
+
+    assert "doesn't match" in out or "none was supplied" in out
+    assert len(list((root / ".decisions" / "records").iterdir())) == 1
+
+
+def test_the_deferred_path_still_works_end_to_end_through_the_token_flow(root):
+    out = log_confirmed("holding off on sharding until post-MVP")
+
+    assert "Deferred decision recorded" in out
+    assert "sharding" in (root / ".decisions" / "deferred.md").read_text()
+
+
 def test_log_phase_two_writes_the_record_and_reindexes(root):
-    out = log_tool(
+    out = log_confirmed(
         "sliding window rate limiter in Redis",
-        confirmed=True,
         title="Sliding window rate limiter",
         why="Token bucket bursts at the window edge",
         alternatives=json.dumps(["Token bucket — bursts at the window edge"]),
@@ -232,9 +301,8 @@ def test_log_persists_declared_relationships(root):
     write_record(root, "0001", "Redis for shared counters")
     build_index(root, force=True)
 
-    log_tool(
+    log_confirmed(
         "sliding window rate limiter",
-        confirmed=True,
         relationships=json.dumps([{"type": "depends-on", "target": "DR-0001"}]),
         alternatives=json.dumps(["Token bucket — bursts at the window edge"]),
     )
@@ -247,9 +315,8 @@ def test_log_supersede_marks_the_old_record_and_reports_it(root):
     write_record(root, "0001", "Redis Streams for events")
     build_index(root, force=True)
 
-    out = log_tool(
+    out = log_confirmed(
         "Kafka for events",
-        confirmed=True,
         relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
         alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
     )
@@ -260,14 +327,14 @@ def test_log_supersede_marks_the_old_record_and_reports_it(root):
 
 
 def test_log_rejects_malformed_relationship_json_without_writing(root):
-    out = log_tool("some decision", confirmed=True, relationships="{not json}")
+    out = log_confirmed("some decision", relationships="{not json}")
 
     assert "Error parsing relationships JSON" in out
     assert list((root / ".decisions" / "records").iterdir()) == []
 
 
 def test_log_routes_a_deferral_to_the_deferred_file(root):
-    out = log_tool("holding off on sharding until post-MVP", confirmed=True)
+    out = log_confirmed("holding off on sharding until post-MVP")
 
     assert "Deferred decision recorded" in out
     assert "sharding" in (root / ".decisions" / "deferred.md").read_text()
@@ -275,9 +342,8 @@ def test_log_routes_a_deferral_to_the_deferred_file(root):
 
 
 def test_log_persists_why_and_review_trigger_for_a_deferral(root):
-    log_tool(
+    log_confirmed(
         "holding off on sharding until post-MVP",
-        confirmed=True,
         why="Premature at current scale.",
         review_trigger="user table crosses 10M rows.",
     )
@@ -288,8 +354,8 @@ def test_log_persists_why_and_review_trigger_for_a_deferral(root):
 
 
 def test_explicit_weight_and_category_override_the_classifier(root):
-    log_tool(
-        "some vague thing", weight="heavy", category="domain", confirmed=True,
+    log_confirmed(
+        "some vague thing", weight="heavy", category="domain",
         alternatives=json.dumps(["Doing nothing — status quo was untenable"]),
     )
 
@@ -301,15 +367,15 @@ def test_explicit_weight_and_category_override_the_classifier(root):
 # --- alternatives (WP-03) -------------------------------------------------
 
 def test_log_rejects_a_heavy_record_with_no_alternatives(root):
-    out = log_tool("Kafka for events", confirmed=True)  # architectural -> heavy by default
+    out = log_confirmed("Kafka for events")  # architectural -> heavy by default
 
     assert "alternatives" in out.lower()
     assert list((root / ".decisions" / "records").iterdir()) == []
 
 
 def test_log_rejects_malformed_alternatives_json_without_writing(root):
-    out = log_tool(
-        "sliding window rate limiter", weight="standard", confirmed=True,
+    out = log_confirmed(
+        "sliding window rate limiter", weight="standard",
         alternatives="{not json}",
     )
 
@@ -318,8 +384,8 @@ def test_log_rejects_malformed_alternatives_json_without_writing(root):
 
 
 def test_log_writes_supplied_alternatives_into_the_record(root):
-    log_tool(
-        "Postgres LISTEN/NOTIFY for the job queue", confirmed=True,
+    log_confirmed(
+        "Postgres LISTEN/NOTIFY for the job queue",
         alternatives=json.dumps([
             "RabbitMQ — extra ops burden",
             "Redis streams — no durability guarantee we need",
@@ -332,8 +398,8 @@ def test_log_writes_supplied_alternatives_into_the_record(root):
 
 
 def test_alternatives_survive_the_full_round_trip_to_query(root):
-    log_tool(
-        "Postgres LISTEN/NOTIFY for the job queue", confirmed=True,
+    log_confirmed(
+        "Postgres LISTEN/NOTIFY for the job queue",
         alternatives=json.dumps([
             "RabbitMQ — extra ops burden",
             "Redis streams — no durability guarantee we need",
