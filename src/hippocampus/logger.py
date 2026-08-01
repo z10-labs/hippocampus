@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+import fcntl
 import re
 import time
 from datetime import date
@@ -33,25 +33,32 @@ def _lock_path(root: Path) -> Path:
 
 
 def _with_lock(root: Path, fn):
-    lock = _lock_path(root)
+    """Serializes writers via fcntl.flock on a persistent lock file, rather
+    than the previous create/delete-a-marker-file scheme. A process that
+    crashes or is killed while holding the lock leaves nothing behind for
+    the next writer to clean up — the OS releases the flock the moment the
+    holding process's file descriptor is closed, on exit for any reason.
+    That removes the old "stale lock blocks every future write until a
+    human deletes a file" failure mode entirely."""
+    lock_path = _lock_path(root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + 5.0
-    while True:
+
+    with open(lock_path, "a") as lock_file:
+        while True:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        f"Could not acquire decision log lock ({lock_path}) within 5 seconds"
+                    )
+                time.sleep(0.05)
         try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            break
-        except FileExistsError:
-            if time.monotonic() > deadline:
-                raise RuntimeError("Could not acquire decision log lock within 5 seconds")
-            time.sleep(0.05)
-    try:
-        return fn()
-    finally:
-        try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+            return fn()
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _slug(title: str) -> str:

@@ -1,6 +1,9 @@
+import multiprocessing
+import time
 from pathlib import Path
 
 from hippocampus.logger import (
+    _lock_path,
     _next_id,
     _slug,
     apply_supersedes,
@@ -14,6 +17,39 @@ from conftest import write_record
 
 STANDARD = ClassificationResult(weight="standard", category="performance", reason="test")
 HEAVY = ClassificationResult(weight="heavy", category="security", reason="test")
+
+
+def _hold_the_lock_until_killed(root_str: str) -> None:
+    """Run in a separate process: acquire the lock and never release it
+    cooperatively — the parent test kills this process to simulate a crash."""
+    import fcntl
+
+    lock_path = _lock_path(Path(root_str))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        while True:
+            time.sleep(0.1)
+
+
+def test_a_crashed_lock_holder_does_not_block_subsequent_writers(root):
+    proc = multiprocessing.Process(target=_hold_the_lock_until_killed, args=(str(root),))
+    proc.start()
+    time.sleep(0.3)  # give the child time to actually acquire the lock
+
+    proc.kill()  # SIGKILL: no finally block runs, nothing cleans up cooperatively
+    proc.join(timeout=2)
+
+    # The OS must release the flock the instant the process dies. This
+    # write must succeed quickly, not wait out (or hit) the 5s deadline —
+    # that deadline firing here would mean the old stale-lock failure mode
+    # survived the switch to flock.
+    start = time.monotonic()
+    path = write_standard_record(root, "some decision", STANDARD)
+    elapsed = time.monotonic() - start
+
+    assert Path(path).exists()
+    assert elapsed < 2.0
 
 
 def test_ids_start_at_0001_and_increment(root):
