@@ -188,8 +188,12 @@ def hippocampus_log(
             return "\n".join(lines)
 
         # Surface related decisions
-        candidates = query(settings.ROOT, description, 5)
-        direct = [r for r in candidates if r.surfaced_via == "direct" and r.score >= 0.20]
+        # Phase 1 uses its own, looser bar than the retrieval floor
+        # (retriever.MIN_DIRECT_SCORE) — a candidate worth surfacing for
+        # possible relationship linking doesn't need to clear the same noise
+        # threshold as a result shown as an established prior decision.
+        candidates = query(settings.ROOT, description, 5, min_score=0.20)
+        direct = [r for r in candidates if r.surfaced_via == "direct"]
 
         if direct:
             lines.append("Related decisions found — if any constrained your choice, include them as relationships in Phase 2:")
