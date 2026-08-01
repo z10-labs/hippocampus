@@ -7,9 +7,31 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from hippocampus.types import IndexEntry, Relationship, ReverseLink, VectorIndex
 
 _model = None
+
+# Bumped whenever the on-disk shape changes (WP-07: unit-normalized
+# embeddings, no indent, deferred entries mixed in). A missing/mismatched
+# version is treated as no index at all rather than risking a KeyError on a
+# field an older file doesn't have — see load_index.
+INDEX_SCHEMA_VERSION = 2
+
+# path -> (file mtime, VectorIndex). Avoids re-reading and re-parsing the
+# whole JSON file on every single query within a process. Refreshed directly
+# by _save_index right after a write, and invalidated implicitly by the
+# mtime check whenever the file changes underneath it.
+_index_cache: dict[Path, tuple[float, VectorIndex]] = {}
+
+# path -> (file mtime, (N, D) float32 matrix of every entry's embedding, in
+# load_index(root).entries order). Kept separate from _index_cache: building
+# this matrix from a list of Python-float lists is the actual expensive step
+# in scoring (measured ~3ms for 500x384 on one machine), not the dot product
+# against it (~0.004ms) — so it is worth holding onto across queries within
+# a session exactly like the parsed index itself, not rebuilding it per call.
+_matrix_cache: dict[Path, tuple[float, np.ndarray]] = {}
 
 
 def _get_model():
@@ -25,6 +47,23 @@ def embed(text: str) -> list[float]:
     return next(model.embed([text])).tolist()
 
 
+def embed_many(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
+    model = _get_model()
+    return [v.tolist() for v in model.embed(texts)]
+
+
+def _normalize(vec: list[float]) -> list[float]:
+    """Unit-normalize an embedding at index time so retrieval-time cosine
+    similarity reduces to a plain dot product against the query vector."""
+    arr = np.asarray(vec, dtype=np.float64)
+    norm = np.linalg.norm(arr)
+    if norm == 0:
+        return list(vec)
+    return (arr / norm).tolist()
+
+
 def _index_path(root: Path) -> Path:
     return root / ".hippocampus" / "index.json"
 
@@ -32,8 +71,26 @@ def _index_path(root: Path) -> Path:
 def load_index(root: Path) -> VectorIndex:
     path = _index_path(root)
     if not path.exists():
+        _index_cache.pop(path, None)
+        _matrix_cache.pop(path, None)
         return VectorIndex(entries=[], built_at=0)
+
+    file_mtime = path.stat().st_mtime
+    cached = _index_cache.get(path)
+    if cached is not None and cached[0] == file_mtime:
+        return cached[1]
+
     data = json.loads(path.read_text())
+    if data.get("version") != INDEX_SCHEMA_VERSION:
+        # Unrecognized on-disk shape (older version, or none at all). Treat
+        # exactly like a missing index rather than parsing fields that may
+        # not exist — ensure_index/build_index already know how to turn an
+        # empty existing index into a full rebuild, which writes the current
+        # version back out.
+        index = VectorIndex(entries=[], built_at=0)
+        _index_cache[path] = (file_mtime, index)
+        return index
+
     entries = [
         IndexEntry(
             id=e["id"],
@@ -52,16 +109,43 @@ def load_index(root: Path) -> VectorIndex:
         )
         for e in data["entries"]
     ]
-    return VectorIndex(entries=entries, built_at=data["built_at"])
+    index = VectorIndex(entries=entries, built_at=data["built_at"])
+    _index_cache[path] = (file_mtime, index)
+    return index
+
+
+def embeddings_matrix(root: Path) -> np.ndarray:
+    """Cached (N, D) float32 matrix of every entry's embedding, in
+    load_index(root).entries order. Callers doing a query against every
+    entry (retriever.query) should use this instead of building their own
+    matrix from a fresh list comprehension each time."""
+    index = load_index(root)  # ensures the cache below keys off a fresh mtime
+    path = _index_path(root)
+    file_mtime = path.stat().st_mtime if path.exists() else 0.0
+
+    cached = _matrix_cache.get(path)
+    if cached is not None and cached[0] == file_mtime:
+        return cached[1]
+
+    matrix = (
+        np.asarray([e.embedding for e in index.entries], dtype=np.float32)
+        if index.entries else np.zeros((0, 0), dtype=np.float32)
+    )
+    _matrix_cache[path] = (file_mtime, matrix)
+    return matrix
 
 
 def _save_index(root: Path, index: VectorIndex) -> None:
     path = _index_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # No indent: this is a gitignored derived cache nobody reads by hand,
+    # and indent=2 was most of the file size on lists of 384 floats.
     path.write_text(json.dumps({
+        "version": INDEX_SCHEMA_VERSION,
         "built_at": index.built_at,
         "entries": [asdict(e) for e in index.entries],
-    }, indent=2))
+    }))
+    _index_cache[path] = (path.stat().st_mtime, index)
 
 
 def _records_dir(root: Path) -> Path:
@@ -198,7 +282,7 @@ def _build_deferred_entries(root: Path) -> list[IndexEntry]:
             file_path=file_path,
             relationships=[],
             reverse_links=[],
-            embedding=embed(document),
+            embedding=_normalize(embed(document)),
             document=document,
             why=why,
             alternatives="",
@@ -218,6 +302,10 @@ def build_index(root: Path, force: bool = False) -> dict:
 
     record_files = sorted(records_dir.glob("*.md")) if records_dir.exists() else []
 
+    # First pass: parse every file and decide which need (re-)embedding, but
+    # don't embed yet — fastembed is substantially faster given a batch than
+    # called once per record in a loop.
+    to_embed: list[dict] = []
     for file_path in record_files:
         mtime_ms = int(file_path.stat().st_mtime * 1000)
         parsed = _parse_file(file_path)
@@ -230,9 +318,13 @@ def build_index(root: Path, force: bool = False) -> dict:
             skipped += 1
             continue
 
-        text = f"{parsed['title']}\n\n{parsed['content']}"
-        embedding = embed(text)
+        parsed["_file_path"] = file_path
+        parsed["_text"] = f"{parsed['title']}\n\n{parsed['content']}"
+        to_embed.append(parsed)
 
+    embeddings = [_normalize(e) for e in embed_many([p["_text"] for p in to_embed])]
+
+    for parsed, embedding in zip(to_embed, embeddings):
         by_id[parsed["id"]] = IndexEntry(
             id=parsed["id"],
             title=parsed["title"],
@@ -240,11 +332,11 @@ def build_index(root: Path, force: bool = False) -> dict:
             status=parsed["status"],
             weight=parsed["weight"],
             date=parsed["date"],
-            file_path=str(file_path.relative_to(root)),
+            file_path=str(parsed["_file_path"].relative_to(root)),
             relationships=parsed["relationships"],
             reverse_links=[],  # populated below
             embedding=embedding,
-            document=text,
+            document=parsed["_text"],
             why=parsed["why"],
             alternatives=parsed["alternatives"],
         )

@@ -4,7 +4,9 @@ import math
 from pathlib import Path
 from typing import Optional
 
-from hippocampus.indexer import embed, load_index
+import numpy as np
+
+from hippocampus.indexer import _normalize, embed, embeddings_matrix, load_index
 from hippocampus.types import IndexEntry, RetrievalResult
 
 # Calibrated against the real all-MiniLM-L6-v2 model (see WP-06 PR body for
@@ -30,11 +32,27 @@ _LIVE_STATUSES = {"accepted", "proposed", "deferred"}
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
+    """Pure-Python reference implementation. query() itself uses the
+    vectorized _score_all below; this is kept for the numpy-parity test."""
     dot = sum(x * y for x, y in zip(a, b))
     mag_a = math.sqrt(sum(x * x for x in a))
     mag_b = math.sqrt(sum(x * x for x in b))
     denom = mag_a * mag_b
     return dot / denom if denom else 0.0
+
+
+def _score_all(matrix: np.ndarray, q_normalized: list[float]) -> list[float]:
+    """Vectorized replacement for calling _cosine once per entry. `matrix`
+    (rows in the same order as the entries being scored) is unit-normalized
+    at index time (indexer._normalize), so cosine similarity reduces to a
+    single dot product per row — one matrix-vector multiply instead of a
+    per-entry Python loop recomputing both magnitudes. Building the matrix
+    itself (not the multiply) is the expensive part, so callers should use
+    indexer.embeddings_matrix rather than rebuild it on every query."""
+    if matrix.shape[0] == 0:
+        return []
+    q = np.asarray(q_normalized, dtype=np.float32)
+    return (matrix @ q).tolist()
 
 
 def _effective_score(entry: IndexEntry, raw_score: float) -> float:
@@ -54,7 +72,8 @@ def query(
         return []
 
     floor = MIN_DIRECT_SCORE if min_score is None else min_score
-    q_emb = embed(query_text)
+    q_normalized = _normalize(embed(query_text))
+    raw_scores = _score_all(embeddings_matrix(root), q_normalized)
 
     # Each entry carries its raw cosine score and its status-adjusted
     # (effective) score. Sorting and display use the effective score, so a
@@ -64,9 +83,7 @@ def query(
     # for being superseded — WP-04 requires it stay visible, demoted, never
     # hidden. Demotion and the noise floor are separate concerns.
     scored = sorted(
-        ((e, raw, _effective_score(e, raw)) for e, raw in (
-            (e, _cosine(q_emb, e.embedding)) for e in index.entries
-        )),
+        ((e, raw, _effective_score(e, raw)) for e, raw in zip(index.entries, raw_scores)),
         key=lambda t: t[2],
         reverse=True,
     )

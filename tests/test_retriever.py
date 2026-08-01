@@ -1,7 +1,11 @@
+import random
+
+import numpy as np
 import pytest
 
-from hippocampus.indexer import build_index
-from hippocampus.retriever import _cosine, _rel_label, query
+from hippocampus.indexer import _normalize, build_index
+from hippocampus.retriever import _cosine, _rel_label, _score_all, query
+from hippocampus.types import IndexEntry
 
 from conftest import write_record
 
@@ -121,7 +125,8 @@ def test_a_superseded_record_is_demoted_below_an_accepted_one_at_equal_similarit
 
 
 # --- relevance floor (WP-06) -------------------------------------------------
-# Scores are injected via monkeypatching _cosine rather than relying on
+# Scores are injected via monkeypatching _score_all (the vectorized scoring
+# function query() actually calls, since WP-07) rather than relying on
 # fake_embed's natural output or asserting against the MIN_DIRECT_SCORE
 # constant directly, so retuning that constant doesn't break these tests.
 
@@ -130,7 +135,7 @@ def test_direct_hits_below_the_relevance_floor_are_filtered_out(root, monkeypatc
     build_index(root, force=True)
 
     from hippocampus import retriever
-    monkeypatch.setattr(retriever, "_cosine", lambda a, b: 0.01)
+    monkeypatch.setattr(retriever, "_score_all", lambda matrix, q: [0.01] * len(matrix))
 
     assert query(root, "anything") == []
 
@@ -140,7 +145,7 @@ def test_min_score_override_is_respected(root, monkeypatch):
     build_index(root, force=True)
 
     from hippocampus import retriever
-    monkeypatch.setattr(retriever, "_cosine", lambda a, b: 0.01)
+    monkeypatch.setattr(retriever, "_score_all", lambda matrix, q: [0.01] * len(matrix))
 
     # The default floor excludes this score; an explicit, lower override lets
     # the same result through.
@@ -159,16 +164,17 @@ def test_a_relationship_expanded_result_at_score_zero_is_exempt_from_the_floor(r
     from hippocampus import retriever
     from hippocampus.indexer import load_index
 
-    entries = {e.id: e for e in load_index(root).entries}
+    # _score_all now receives a bare matrix, not the entry objects, so match
+    # by position: query()'s zip(index.entries, raw_scores) pairs them up in
+    # this same load_index(root).entries order.
+    ordered_ids = [e.id for e in load_index(root).entries]
 
-    def fake_cosine(q_emb, embedding):
+    def fake_score_all(matrix, q_normalized):
         # DR-0002 is the direct hit; DR-0001's raw similarity is forced to
         # 0.0 — a score no direct hit could ever clear on its own.
-        if embedding == entries["DR-0002"].embedding:
-            return 0.9
-        return 0.0
+        return [0.9 if eid == "DR-0002" else 0.0 for eid in ordered_ids]
 
-    monkeypatch.setattr(retriever, "_cosine", fake_cosine)
+    monkeypatch.setattr(retriever, "_score_all", fake_score_all)
 
     results = query(root, "Postgres ledger", top_n=1)
     by_id = {r.id: r for r in results}
@@ -176,3 +182,28 @@ def test_a_relationship_expanded_result_at_score_zero_is_exempt_from_the_floor(r
     assert by_id["DR-0002"].surfaced_via == "direct"
     assert by_id["DR-0001"].surfaced_via == "relationship"
     assert by_id["DR-0001"].score == 0.0
+
+
+# --- numpy scoring parity (WP-07) -------------------------------------------
+
+def test_vectorized_scoring_matches_the_reference_cosine_implementation():
+    random.seed(42)
+    raw_vectors = [[random.uniform(-1, 1) for _ in range(16)] for _ in range(10)]
+    q_raw = [random.uniform(-1, 1) for _ in range(16)]
+
+    entries = [
+        IndexEntry(
+            id=f"DR-{i:04d}", title="t", category="architectural", status="accepted",
+            weight="standard", date="2026-01-01", file_path="x.md",
+            relationships=[], reverse_links=[], embedding=_normalize(v),
+            document="", why="", alternatives="",
+        )
+        for i, v in enumerate(raw_vectors)
+    ]
+
+    matrix = np.asarray([e.embedding for e in entries], dtype=np.float32)
+    vectorized_scores = _score_all(matrix, _normalize(q_raw))
+    reference_scores = [_cosine(q_raw, v) for v in raw_vectors]
+
+    for vectorized, reference in zip(vectorized_scores, reference_scores):
+        assert vectorized == pytest.approx(reference, abs=1e-5)

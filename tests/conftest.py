@@ -27,11 +27,18 @@ def fake_embed(text: str) -> list[float]:
     return vec
 
 
+def fake_embed_many(texts: list[str]) -> list[list[float]]:
+    return [fake_embed(t) for t in texts]
+
+
 @pytest.fixture(autouse=True)
 def stub_embeddings(monkeypatch):
     # retriever does `from ... import embed`, so it holds its own reference —
-    # both names have to be patched.
+    # both names have to be patched. build_index calls embed_many (batched)
+    # instead of embed in a loop; only indexer.py calls it, but it must be
+    # patched too or build_index would silently hit the real model.
     monkeypatch.setattr(indexer, "embed", fake_embed)
+    monkeypatch.setattr(indexer, "embed_many", fake_embed_many)
     monkeypatch.setattr(retriever, "embed", fake_embed)
 
 
