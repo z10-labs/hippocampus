@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from hippocampus.logger import (
     _next_id,
     _slug,
@@ -24,6 +26,18 @@ def test_next_id_continues_past_the_highest_existing(root):
     write_record(root, "0009", "Nine")
     write_record(root, "0003", "Three")
     assert _next_id(root) == "0010"
+
+
+def test_two_consecutive_writes_produce_distinct_ids(root):
+    """_next_id reads the max id and the caller writes afterward, but both
+    happen inside the same write() closure passed to _with_lock — the read
+    and the write share one critical section, so this stays race-safe even
+    across concurrent callers. Regression test per WP-08."""
+    first = write_standard_record(root, "first decision", STANDARD)
+    second = write_standard_record(root, "second decision", STANDARD)
+
+    assert Path(first).name.startswith("0001-")
+    assert Path(second).name.startswith("0002-")
 
 
 def test_slug_is_filesystem_safe_and_bounded():
