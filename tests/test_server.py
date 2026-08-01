@@ -1,6 +1,7 @@
 """Covers the five MCP tools at their function boundary — the same code path the
 MCP host reaches, minus the transport."""
 import json
+import os
 
 import pytest
 
@@ -25,10 +26,56 @@ def point_server_at_tmp_root(root, monkeypatch):
 
 # --- query ---------------------------------------------------------------
 
-def test_query_on_empty_index_tells_the_agent_to_proceed(root):
+def test_query_says_nothing_recorded_yet_when_no_records_exist(root):
     out = query_tool("anything at all")
-    assert "No relevant decisions found" in out
-    assert "Proceed" in out
+    assert "No decision records exist yet in this project" in out
+
+
+def test_query_flags_records_that_failed_to_parse(root):
+    (root / ".decisions" / "records" / "notes.md").write_text("Just some notes, no DR heading.\n")
+    out = query_tool("anything at all")
+    assert "records found but none could be indexed" in out
+
+
+def test_query_says_nothing_matched_when_the_index_has_entries_but_none_qualify(root):
+    write_record(root, "0001", "Postgres for the ledger")
+    build_index(root, force=True)
+    # top_n=0 forces an empty result set against a non-empty index.
+    out = query_tool("Postgres for the ledger", top_n=0)
+    assert "No decisions matched this query above the relevance threshold" in out
+
+
+def test_none_of_the_empty_state_messages_claim_no_constraints_apply(root):
+    write_record(root, "0001", "Postgres for the ledger")
+    build_index(root, force=True)
+
+    outputs = [
+        query_tool("anything", top_n=0),
+    ]
+    for out in outputs:
+        assert "no past constraints apply" not in out.lower()
+
+
+def test_query_finds_records_without_ever_calling_log_or_build_index(root):
+    write_record(root, "0001", "Postgres for the ledger")
+    write_record(root, "0002", "Redis for rate limiting")
+    # Cold start: no build_index call anywhere in this test.
+    out = query_tool("Postgres for the ledger")
+    assert "DR-0001" in out
+    assert "DR-0002" in out
+
+
+def test_query_reflects_a_hand_edited_record_without_a_manual_reindex(root):
+    path = write_record(root, "0001", "Postgres for the ledger", body="## Why\n\nOriginal reason.\n")
+    build_index(root, force=True)
+    built_at = load_index(root).built_at
+
+    path.write_text(path.read_text().replace("Original reason.", "Updated reason after review."))
+    newer = (built_at / 1000) + 1
+    os.utime(path, (newer, newer))
+
+    out = query_tool("Postgres for the ledger")
+    assert "Updated reason after review." in out
 
 
 def test_query_surfaces_why_and_rejected_alternatives_inline(root):

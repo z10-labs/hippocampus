@@ -1,3 +1,5 @@
+import os
+
 from hippocampus.indexer import (
     _parse_alternatives,
     _parse_file,
@@ -5,8 +7,10 @@ from hippocampus.indexer import (
     _parse_why,
     _reverse_type,
     build_index,
+    ensure_index,
     load_index,
 )
+from hippocampus.retriever import query
 
 from conftest import write_record
 
@@ -97,3 +101,94 @@ def test_load_index_on_missing_file_is_empty_not_an_error(tmp_path):
     index = load_index(tmp_path)
     assert index.entries == []
     assert index.built_at == 0
+
+
+# --- deletion --------------------------------------------------------------
+
+def test_build_index_prunes_records_whose_file_was_deleted(root):
+    path = write_record(root, "0001", "Event sourced core")
+    write_record(root, "0002", "Postgres ledger")
+    build_index(root, force=True)
+
+    path.unlink()
+    stats = build_index(root, force=False)
+
+    assert stats["removed"] == 1
+    ids = [e.id for e in load_index(root).entries]
+    assert ids == ["DR-0002"]
+
+
+def test_deleting_a_dependency_does_not_leave_a_phantom_relationship(root):
+    dep_path = write_record(root, "0001", "Event sourced core")
+    write_record(root, "0002", "Postgres ledger", body="## Relationships\n\n- depends-on: DR-0001\n")
+    build_index(root, force=True)
+
+    dep_path.unlink()
+    build_index(root, force=False)
+
+    # Must not crash, and the deleted id must not resolve to a live entry.
+    results = query(root, "Postgres ledger")
+    assert all(r.id != "DR-0001" for r in results)
+
+
+# --- ensure_index ------------------------------------------------------------
+
+def test_ensure_index_builds_from_scratch_on_cold_start(root):
+    write_record(root, "0001", "Event sourced core")
+    write_record(root, "0002", "Postgres ledger")
+
+    ensure_index(root)  # no build_index call has ever happened
+
+    ids = sorted(e.id for e in load_index(root).entries)
+    assert ids == ["DR-0001", "DR-0002"]
+
+
+def test_ensure_index_picks_up_a_hand_edited_record(root):
+    path = write_record(root, "0001", "Postgres for the ledger", body="## Why\n\nOriginal reason.\n")
+    build_index(root, force=True)
+    built_at = load_index(root).built_at
+
+    path.write_text(path.read_text().replace("Original reason.", "Updated reason."))
+    newer = (built_at / 1000) + 1
+    os.utime(path, (newer, newer))
+
+    ensure_index(root)
+
+    entry = next(e for e in load_index(root).entries if e.id == "DR-0001")
+    assert "Updated reason." in entry.why
+
+
+def test_ensure_index_prunes_after_a_record_is_deleted(root):
+    path = write_record(root, "0001", "Event sourced core")
+    write_record(root, "0002", "Postgres ledger")
+    build_index(root, force=True)
+
+    path.unlink()
+    ensure_index(root)
+
+    ids = [e.id for e in load_index(root).entries]
+    assert ids == ["DR-0002"]
+
+
+def test_ensure_index_is_a_noop_when_records_dir_is_missing(tmp_path):
+    ensure_index(tmp_path)  # no .decisions/records/ at all
+    assert not (tmp_path / ".hippocampus" / "index.json").exists()
+
+
+def test_ensure_index_does_not_rebuild_when_nothing_changed(root, monkeypatch):
+    path = write_record(root, "0001", "Event sourced core")
+    build_index(root, force=True)
+    built_at = load_index(root).built_at
+
+    # Force the file mtime safely earlier than the build, so this test isn't
+    # flaky about landing in the same millisecond as build_index's clock read.
+    older = (built_at - 1000) / 1000
+    os.utime(path, (older, older))
+
+    calls = []
+    monkeypatch.setattr(
+        "hippocampus.indexer.build_index",
+        lambda *a, **k: calls.append(1) or {"indexed": 0, "skipped": 1, "total": 1, "removed": 0},
+    )
+    ensure_index(root)
+    assert calls == []
