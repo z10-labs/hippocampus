@@ -98,6 +98,27 @@ def test_query_says_so_when_no_alternatives_were_documented(root):
     assert "Rejected: (none documented)" in query_tool("Postgres for the ledger")
 
 
+# --- status (WP-04) --------------------------------------------------------
+
+def test_query_flags_a_superseded_record_on_its_own_id_line(root):
+    write_record(root, "0001", "Redis Streams for events")
+    build_index(root, force=True)
+
+    log_tool(
+        "Kafka for events",
+        confirmed=True,
+        relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
+        alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
+    )
+
+    out = query_tool("Redis Streams for events")
+    dr0001_line = next(line for line in out.splitlines() if line.startswith("DR-0001"))
+    assert "SUPERSEDED BY DR-0002" in dr0001_line
+    # The still-live superseding record must not carry the marker.
+    dr0002_line = next(line for line in out.splitlines() if line.startswith("DR-0002"))
+    assert "SUPERSEDED" not in dr0002_line
+
+
 # --- classify ------------------------------------------------------------
 
 def test_classify_recommends_recording_a_real_decision():
@@ -292,6 +313,14 @@ def test_list_filters_by_weight(root):
     assert "DR-0001" not in out
 
 
+def test_list_shows_the_superseded_marker(root):
+    write_record(root, "0001", "Old approach", status="superseded by DR-0002")
+    build_index(root, force=True)
+
+    out = list_tool()
+    assert "SUPERSEDED BY DR-0002" in out
+
+
 # --- chain ---------------------------------------------------------------
 
 def test_chain_on_an_empty_index_explains_itself(root):
@@ -333,3 +362,10 @@ def test_chain_flags_a_dangling_reference(root):
     build_index(root, force=True)
 
     assert "not in index" in chain_tool("DR-0001")
+
+
+def test_chain_shows_the_superseded_marker(root):
+    write_record(root, "0001", "Old approach", status="superseded by DR-0002")
+    build_index(root, force=True)
+
+    assert "SUPERSEDED BY DR-0002" in chain_tool("DR-0001")

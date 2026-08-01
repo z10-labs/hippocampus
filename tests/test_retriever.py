@@ -94,3 +94,27 @@ def test_rel_labels_are_human_readable():
     assert _rel_label("supersedes") == "Supersedes"
     # Unknown types degrade to the raw string rather than blowing up.
     assert _rel_label("invented-type") == "invented-type"
+
+
+# --- status (WP-04) --------------------------------------------------------
+
+def test_results_carry_the_source_records_status(root):
+    write_record(root, "0001", "Postgres ledger")
+    build_index(root, force=True)
+
+    result = next(r for r in query(root, "Postgres ledger") if r.id == "DR-0001")
+    assert result.status == "accepted"
+
+
+def test_a_superseded_record_is_demoted_below_an_accepted_one_at_equal_similarity(root):
+    body = "## Why\n\nSame content, so both entries embed identically.\n"
+    write_record(root, "0001", "Old approach", body=body, status="superseded by DR-0002")
+    write_record(root, "0002", "Old approach", body=body, status="accepted")
+    build_index(root, force=True)
+
+    results = query(root, "Old approach", top_n=2)
+    by_id = {r.id: r for r in results}
+
+    # Both are surfaced — superseded records are demoted, never filtered out.
+    assert set(by_id) == {"DR-0001", "DR-0002"}
+    assert by_id["DR-0002"].score > by_id["DR-0001"].score
