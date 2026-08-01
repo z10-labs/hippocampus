@@ -426,8 +426,73 @@ def test_chain_flags_a_dangling_reference(root):
     assert "not in index" in chain_tool("DR-0001")
 
 
+def test_chain_flags_an_unknown_root_id_without_raising(root):
+    write_record(root, "0001", "A")
+    build_index(root, force=True)
+
+    out = chain_tool("DR-9999")
+    assert "not in index" in out
+
+
 def test_chain_shows_the_superseded_marker(root):
     write_record(root, "0001", "Old approach", status="superseded by DR-0002")
     build_index(root, force=True)
 
     assert "SUPERSEDED BY DR-0002" in chain_tool("DR-0001")
+
+
+# --- blast radius (WP-09) --------------------------------------------------
+
+def test_chain_lists_everything_that_depends_on_the_target_under_blast_radius(root):
+    write_record(root, "0001", "A")
+    write_record(root, "0002", "B", body="## Relationships\n\n- depends-on: DR-0001\n")
+    write_record(root, "0003", "C", body="## Relationships\n\n- depends-on: DR-0001\n")
+    build_index(root, force=True)
+
+    out = chain_tool("DR-0001")
+
+    blast_section = out.split("blast radius")[1]
+    assert "DR-0002" in blast_section
+    assert "DR-0003" in blast_section
+
+
+def test_chain_blast_radius_follows_transitive_dependents(root):
+    write_record(root, "0001", "A")
+    write_record(root, "0002", "B", body="## Relationships\n\n- depends-on: DR-0001\n")
+    write_record(root, "0003", "C", body="## Relationships\n\n- depends-on: DR-0002\n")
+    build_index(root, force=True)
+
+    out = chain_tool("DR-0001")
+
+    blast_section = out.split("blast radius")[1]
+    assert "DR-0002" in blast_section
+    assert "DR-0003" in blast_section  # transitively affected, not just the direct dependent
+
+
+def test_chain_shows_the_root_once_even_when_a_cycle_loops_back_to_it(root):
+    write_record(root, "0001", "A", body="## Relationships\n\n- depends-on: DR-0002\n")
+    write_record(root, "0002", "B", body="## Relationships\n\n- depends-on: DR-0001\n")
+    build_index(root, force=True)
+
+    out = chain_tool("DR-0001")  # must terminate in both directions
+    # The root itself must appear exactly once (as the ▶ header) and never
+    # be re-rendered as a child bullet, even though A depends on B and B
+    # depends on A.
+    assert out.count("▶ DR-0001") == 1
+    assert "└─ DR-0001" not in out
+    assert "DR-0002" in out
+
+
+def test_chain_depth_cap_engages_on_a_long_dependency_chain(root):
+    # Build a straight-line chain of 15 records, each depending on the next —
+    # longer than MAX_CHAIN_DEPTH (10).
+    n = 15
+    for i in range(n, 0, -1):
+        body = f"## Relationships\n\n- depends-on: DR-{i + 1:04d}\n" if i < n else ""
+        write_record(root, f"{i:04d}", f"Step {i}", body=body)
+    build_index(root, force=True)
+
+    out = chain_tool("DR-0001")
+    ids_present = [f"DR-{i:04d}" in out for i in range(1, n + 1)]
+    # Some deep id must be missing — the walk was cut off, not exhaustive.
+    assert not all(ids_present)

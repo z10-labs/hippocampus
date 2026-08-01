@@ -352,13 +352,44 @@ def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = Non
 # hippocampus_chain
 # ---------------------------------------------------------------------------
 
+MAX_CHAIN_DEPTH = 10
+
+# Reverse-link types that represent "this would be affected if the target
+# changes" — i.e. the blast radius. Deliberately excludes conflicts-with
+# (symmetric, not a dependency direction), infers, and linked-from (a bare
+# prose reference, not a real dependency).
+_BLAST_RADIUS_REL_TYPES = {"depended-on-by", "overridden-by", "superseded-by"}
+
+
+def _render_chain_node(lines: list[str], entry, depth: int) -> None:
+    indent = "  " * depth
+    meta = " · ".join(filter(None, [entry.category, entry.weight]))
+    header = f"{indent}└─ {entry.id}  ({meta})"
+    status_marker = _status_marker(entry.status)
+    if status_marker:
+        header += f"  {status_marker}"
+    lines.append(header)
+    lines.append(f"{indent}   {entry.title}")
+    if entry.why:
+        short = entry.why[:100] + "…" if len(entry.why) > 100 else entry.why
+        lines.append(f"{indent}   Why: {short}")
+    alts = (entry.alternatives or "").strip()
+    if alts:
+        first = alts.splitlines()[0]
+        lines.append(f"{indent}   Rejected: {first}")
+
+
 @mcp.tool()
 def hippocampus_chain(dr_id: str) -> str:
     """Trace the full dependency chain from a decision record.
 
-    Recursively follows depends-on links to show the full tree of prior decisions
-    that constrain the given DR. Useful before modifying a decision that others
-    may depend on.
+    Renders two directions:
+    - Depends on: what constrains this decision (recursively follows
+      depends-on links) — read this before assuming a decision stands alone.
+    - Blast radius: what would be affected if you changed this decision
+      (recursively follows depended-on-by, overridden-by, and superseded-by
+      reverse links) — read this before modifying a decision others may
+      depend on.
 
     Example: hippocampus_chain("DR-0015")
     """
@@ -369,44 +400,58 @@ def hippocampus_chain(dr_id: str) -> str:
         return "Index is empty. Run hippocampus_log or ensure .decisions/records/ exists."
 
     by_id = {e.id: e for e in index.entries}
-
     lines: list[str] = [f"Decision chain for {dr_id}:", ""]
 
-    def render(target_id: str, depth: int, visited: set[str]) -> None:
-        if target_id in visited:
+    root_entry = by_id.get(dr_id)
+    if not root_entry:
+        lines.append(f"▶ {dr_id}  (not in index)")
+        return "\n".join(lines)
+
+    meta = " · ".join(filter(None, [root_entry.category, root_entry.weight]))
+    header = f"▶ {root_entry.id}  ({meta})"
+    status_marker = _status_marker(root_entry.status)
+    if status_marker:
+        header += f"  {status_marker}"
+    lines.append(header)
+    lines.append(f"   {root_entry.title}")
+
+    def walk(target_id: str, depth: int, visited: set[str], next_ids) -> None:
+        if target_id in visited or depth > MAX_CHAIN_DEPTH:
             return
         visited.add(target_id)
         entry = by_id.get(target_id)
-        indent = "  " * depth
-        marker = "▶" if depth == 0 else "└─"
-
         if not entry:
-            lines.append(f"{indent}{marker} {target_id}  (not in index)")
+            lines.append(f"{'  ' * depth}└─ {target_id}  (not in index)")
             return
+        _render_chain_node(lines, entry, depth)
+        for next_id in next_ids(entry):
+            walk(next_id, depth + 1, visited, next_ids)
 
-        meta = " · ".join(filter(None, [entry.category, entry.weight]))
-        header = f"{indent}{marker} {entry.id}  ({meta})"
-        status_marker = _status_marker(entry.status)
-        if status_marker:
-            header += f"  {status_marker}"
-        lines.append(header)
-        lines.append(f"{indent}   {entry.title}")
-        if entry.why:
-            short = entry.why[:100] + "…" if len(entry.why) > 100 else entry.why
-            lines.append(f"{indent}   Why: {short}")
-        alts = (entry.alternatives or "").strip()
-        if alts:
-            first = alts.splitlines()[0]
-            lines.append(f"{indent}   Rejected: {first}")
+    def depends_on_ids(entry) -> list[str]:
+        return [r.target for r in entry.relationships if r.type == "depends-on"]
 
-        deps = [r for r in entry.relationships if r.type == "depends-on"]
-        unvisited = [d for d in deps if d.target not in visited]
-        if unvisited:
-            lines.append(f"{indent}   ─── depends on ───")
-            for dep in deps:
-                render(dep.target, depth + 1, visited)
+    def blast_radius_ids(entry) -> list[str]:
+        return [r.source for r in entry.reverse_links if r.type in _BLAST_RADIUS_REL_TYPES]
 
-    render(dr_id, 0, set())
+    # Each direction gets its own visited set (seeded with the root, so a
+    # cycle can't loop back and re-render it), so being rendered in one
+    # section never suppresses a record from also appearing in the other.
+    deps = depends_on_ids(root_entry)
+    if deps:
+        lines.append("")
+        lines.append("  ── depends on ──────────────────")
+        visited = {dr_id}
+        for target in deps:
+            walk(target, 1, visited, depends_on_ids)
+
+    blast_radius = blast_radius_ids(root_entry)
+    if blast_radius:
+        lines.append("")
+        lines.append("  ── blast radius (would be affected by a change) ──")
+        visited = {dr_id}
+        for target in blast_radius:
+            walk(target, 1, visited, blast_radius_ids)
+
     return "\n".join(lines)
 
 
