@@ -110,6 +110,13 @@ def test_query_flags_a_superseded_record_on_its_own_id_line(root):
         relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
         alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
     )
+    # log_tool's own incremental reindex can race apply_supersedes's rewrite
+    # of DR-0001 within the same millisecond (mtime truncates to int ms; see
+    # WP-02's implementer note), which is a genuine but separate flakiness in
+    # build_index's per-file skip check, not something this test should mask
+    # or exercise. Force a full rebuild so this test asserts rendering, not
+    # incremental-reindex timing.
+    build_index(root, force=True)
 
     out = query_tool("Redis Streams for events")
     dr0001_line = next(line for line in out.splitlines() if line.startswith("DR-0001"))
