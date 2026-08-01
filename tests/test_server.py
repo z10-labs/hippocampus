@@ -147,6 +147,7 @@ def test_log_phase_two_writes_the_record_and_reindexes(root):
         confirmed=True,
         title="Sliding window rate limiter",
         why="Token bucket bursts at the window edge",
+        alternatives=json.dumps(["Token bucket — bursts at the window edge"]),
     )
     assert "Record written" in out
 
@@ -165,6 +166,7 @@ def test_log_persists_declared_relationships(root):
         "sliding window rate limiter",
         confirmed=True,
         relationships=json.dumps([{"type": "depends-on", "target": "DR-0001"}]),
+        alternatives=json.dumps(["Token bucket — bursts at the window edge"]),
     )
 
     entry = next(e for e in load_index(root).entries if e.id == "DR-0002")
@@ -179,6 +181,7 @@ def test_log_supersede_marks_the_old_record_and_reports_it(root):
         "Kafka for events",
         confirmed=True,
         relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
+        alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
     )
 
     assert "superseded by DR-0002" in out
@@ -202,11 +205,62 @@ def test_log_routes_a_deferral_to_the_deferred_file(root):
 
 
 def test_explicit_weight_and_category_override_the_classifier(root):
-    log_tool("some vague thing", weight="heavy", category="domain", confirmed=True)
+    log_tool(
+        "some vague thing", weight="heavy", category="domain", confirmed=True,
+        alternatives=json.dumps(["Doing nothing — status quo was untenable"]),
+    )
 
     entry = load_index(root).entries[0]
     assert entry.weight == "heavy"
     assert entry.category == "domain"
+
+
+# --- alternatives (WP-03) -------------------------------------------------
+
+def test_log_rejects_a_heavy_record_with_no_alternatives(root):
+    out = log_tool("Kafka for events", confirmed=True)  # architectural -> heavy by default
+
+    assert "alternatives" in out.lower()
+    assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_log_rejects_malformed_alternatives_json_without_writing(root):
+    out = log_tool(
+        "sliding window rate limiter", weight="standard", confirmed=True,
+        alternatives="{not json}",
+    )
+
+    assert "Error parsing alternatives JSON" in out
+    assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_log_writes_supplied_alternatives_into_the_record(root):
+    log_tool(
+        "Postgres LISTEN/NOTIFY for the job queue", confirmed=True,
+        alternatives=json.dumps([
+            "RabbitMQ — extra ops burden",
+            "Redis streams — no durability guarantee we need",
+        ]),
+    )
+
+    content = (root / ".decisions" / "records" / "0001-postgres-listen-notify-for-the-job-queue.md").read_text()
+    assert "- RabbitMQ — extra ops burden" in content
+    assert "- Redis streams — no durability guarantee we need" in content
+
+
+def test_alternatives_survive_the_full_round_trip_to_query(root):
+    log_tool(
+        "Postgres LISTEN/NOTIFY for the job queue", confirmed=True,
+        alternatives=json.dumps([
+            "RabbitMQ — extra ops burden",
+            "Redis streams — no durability guarantee we need",
+        ]),
+    )
+    build_index(root, force=True)
+
+    out = query_tool("Postgres LISTEN/NOTIFY for the job queue")
+    assert "Rejected: RabbitMQ — extra ops burden" in out
+    assert "Redis streams — no durability guarantee we need" in out
 
 
 # --- list ----------------------------------------------------------------

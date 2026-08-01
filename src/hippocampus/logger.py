@@ -65,6 +65,12 @@ def _relationships_block(relationships: list[Relationship]) -> str:
     return "\n".join(f"- {r.type}: {r.target}" for r in relationships)
 
 
+def _alternatives_block(alternatives: Optional[list[str]], placeholder: str) -> str:
+    if not alternatives:
+        return placeholder
+    return "\n".join(f"- {a}" for a in alternatives)
+
+
 def write_standard_record(
     root: Path,
     description: str,
@@ -73,12 +79,14 @@ def write_standard_record(
     why: Optional[str] = None,
     trade_off: Optional[str] = None,
     relationships: Optional[list[Relationship]] = None,
+    alternatives: Optional[list[str]] = None,
 ) -> str:
     today = _today()
     title = (title or description[:60]).strip()
     why = (why or description).strip()
     trade_off = (trade_off or "Not documented").strip()
     rels = relationships or []
+    alts_block = _alternatives_block(alternatives, "_See description above._")
 
     slug = _slug(title)
 
@@ -107,7 +115,7 @@ def write_standard_record(
 
 ## Alternatives Skipped
 
-_See description above._
+{alts_block}
 
 ## Relationships
 
@@ -128,6 +136,7 @@ def write_heavy_record(
     trade_off: Optional[str] = None,
     relationships: Optional[list[Relationship]] = None,
     review_trigger: Optional[str] = None,
+    alternatives: Optional[list[str]] = None,
 ) -> str:
     today = _today()
     title = (title or description[:60]).strip()
@@ -135,6 +144,7 @@ def write_heavy_record(
     trade_off = (trade_off or "Not documented").strip()
     review_trigger = (review_trigger or "Not specified").strip()
     rels = relationships or []
+    alts_block = _alternatives_block(alternatives, "_No alternatives documented._")
 
     slug = _slug(title)
 
@@ -159,7 +169,7 @@ def write_heavy_record(
 
 ## Alternatives Considered
 
-_No alternatives documented._
+{alts_block}
 
 ## Consequences
 
