@@ -30,10 +30,9 @@ No external services. No API key. One ~30 MB embedding model, downloaded once, t
 pip install git+https://github.com/z10-labs/hippocampus.git
 ```
 
-This pins `mcp` below 2.0: the 2.x release relocated `mcp.server.fastmcp`, and a port to the new
-API hasn't landed yet. The pin lives in `pyproject.toml` and applies automatically — nothing extra
-to add to the command above — but if you already depend on `mcp>=2` elsewhere in the same
-environment, that's a real conflict, not a version-string nitpick.
+Works with `mcp` 1.x or 2.x — the 2.0 release renamed `FastMCP` to `MCPServer` and relocated it
+from `mcp.server.fastmcp` to `mcp.server`; `server.py` shims the import so either major version
+resolves without a pin.
 
 Register it with your agent — for Claude Code, in the consuming project's `.claude/settings.json`:
 
