@@ -1,5 +1,6 @@
 """Covers the five MCP tools at their function boundary — the same code path the
 MCP host reaches, minus the transport."""
+
 import json
 import os
 import re
@@ -33,12 +34,17 @@ def log_confirmed(description, weight=None, category=None, **phase2_kwargs):
     phase1_out = log_tool(description, weight=weight, category=category)
     token = re.search(r'token="([^"]+)"', phase1_out).group(1)
     return log_tool(
-        description, weight=weight, category=category,
-        confirmed=True, token=token, **phase2_kwargs,
+        description,
+        weight=weight,
+        category=category,
+        confirmed=True,
+        token=token,
+        **phase2_kwargs,
     )
 
 
 # --- query ---------------------------------------------------------------
+
 
 def test_query_says_nothing_recorded_yet_when_no_records_exist(root):
     out = query_tool("anything at all")
@@ -96,9 +102,10 @@ def test_query_reflects_a_hand_edited_record_without_a_manual_reindex(root):
 
 def test_query_surfaces_why_and_rejected_alternatives_inline(root):
     write_record(
-        root, "0001", "Postgres for the ledger",
-        body="## Why\n\nRelational integrity across accounts.\n\n"
-             "## Alternatives Skipped\n\n- DynamoDB — no cross-partition transactions\n",
+        root,
+        "0001",
+        "Postgres for the ledger",
+        body="## Why\n\nRelational integrity across accounts.\n\n## Alternatives Skipped\n\n- DynamoDB — no cross-partition transactions\n",
     )
     build_index(root, force=True)
 
@@ -115,6 +122,7 @@ def test_query_says_so_when_no_alternatives_were_documented(root):
 
 
 # --- status (WP-04) --------------------------------------------------------
+
 
 def test_query_flags_a_superseded_record_on_its_own_id_line(root):
     write_record(root, "0001", "Redis Streams for events")
@@ -142,6 +150,7 @@ def test_query_flags_a_superseded_record_on_its_own_id_line(root):
 
 
 # --- deferred (WP-05) -------------------------------------------------------
+
 
 def test_query_flags_deferred_entries_as_not_yet_decided(root):
     write_deferred_entry(root, "Multi-region replication, revisit post-MVP", why="Not enough data yet.")
@@ -182,6 +191,7 @@ def test_chain_on_a_deferred_id_does_not_crash(root):
 
 # --- classify ------------------------------------------------------------
 
+
 def test_classify_recommends_recording_a_real_decision():
     out = classify_tool("use mTLS for service authentication")
     assert "Weight: heavy" in out
@@ -195,6 +205,7 @@ def test_classify_writes_nothing(root):
 
 
 # --- log -----------------------------------------------------------------
+
 
 def test_log_refuses_implementation_details(root):
     out = log_tool("rename the variable name from x to count")
@@ -224,6 +235,7 @@ def test_log_phase_one_surfaces_related_records_as_link_candidates(root):
 
 
 # --- two-phase enforcement (WP-10) ------------------------------------------
+
 
 def test_confirmed_true_with_no_token_writes_nothing_and_returns_phase_one(root):
     out = log_tool("sliding window rate limiter", confirmed=True)
@@ -355,7 +367,9 @@ def test_log_persists_why_and_review_trigger_for_a_deferral(root):
 
 def test_explicit_weight_and_category_override_the_classifier(root):
     log_confirmed(
-        "some vague thing", weight="heavy", category="domain",
+        "some vague thing",
+        weight="heavy",
+        category="domain",
         alternatives=json.dumps(["Doing nothing — status quo was untenable"]),
     )
 
@@ -366,6 +380,7 @@ def test_explicit_weight_and_category_override_the_classifier(root):
 
 # --- alternatives (WP-03) -------------------------------------------------
 
+
 def test_log_rejects_a_heavy_record_with_no_alternatives(root):
     out = log_confirmed("Kafka for events")  # architectural -> heavy by default
 
@@ -375,7 +390,8 @@ def test_log_rejects_a_heavy_record_with_no_alternatives(root):
 
 def test_log_rejects_malformed_alternatives_json_without_writing(root):
     out = log_confirmed(
-        "sliding window rate limiter", weight="standard",
+        "sliding window rate limiter",
+        weight="standard",
         alternatives="{not json}",
     )
 
@@ -386,10 +402,12 @@ def test_log_rejects_malformed_alternatives_json_without_writing(root):
 def test_log_writes_supplied_alternatives_into_the_record(root):
     log_confirmed(
         "Postgres LISTEN/NOTIFY for the job queue",
-        alternatives=json.dumps([
-            "RabbitMQ — extra ops burden",
-            "Redis streams — no durability guarantee we need",
-        ]),
+        alternatives=json.dumps(
+            [
+                "RabbitMQ — extra ops burden",
+                "Redis streams — no durability guarantee we need",
+            ]
+        ),
     )
 
     content = (root / ".decisions" / "records" / "0001-postgres-listen-notify-for-the-job-queue.md").read_text()
@@ -400,10 +418,12 @@ def test_log_writes_supplied_alternatives_into_the_record(root):
 def test_alternatives_survive_the_full_round_trip_to_query(root):
     log_confirmed(
         "Postgres LISTEN/NOTIFY for the job queue",
-        alternatives=json.dumps([
-            "RabbitMQ — extra ops burden",
-            "Redis streams — no durability guarantee we need",
-        ]),
+        alternatives=json.dumps(
+            [
+                "RabbitMQ — extra ops burden",
+                "Redis streams — no durability guarantee we need",
+            ]
+        ),
     )
     build_index(root, force=True)
 
@@ -413,6 +433,7 @@ def test_alternatives_survive_the_full_round_trip_to_query(root):
 
 
 # --- list ----------------------------------------------------------------
+
 
 def test_list_reports_when_nothing_matches_the_filter(root):
     write_record(root, "0001", "Postgres ledger", category="data")
@@ -450,6 +471,7 @@ def test_list_shows_the_superseded_marker(root):
 
 
 # --- chain ---------------------------------------------------------------
+
 
 def test_chain_on_an_empty_index_explains_itself(root):
     assert "Index is empty" in chain_tool("DR-0001")
@@ -508,6 +530,7 @@ def test_chain_shows_the_superseded_marker(root):
 
 
 # --- blast radius (WP-09) --------------------------------------------------
+
 
 def test_chain_lists_everything_that_depends_on_the_target_under_blast_radius(root):
     write_record(root, "0001", "A")

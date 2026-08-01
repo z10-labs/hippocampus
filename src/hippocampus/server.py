@@ -1,4 +1,5 @@
 """Hippocampus MCP server — codebase decision memory."""
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,7 @@ from hippocampus.logger import (
     write_heavy_record,
     write_standard_record,
 )
-from hippocampus.retriever import _rel_label, query
+from hippocampus.retriever import query
 from hippocampus.types import ClassificationResult, Relationship
 
 mcp = FastMCP("hippocampus")
@@ -35,10 +36,7 @@ def _empty_state_message(root: Path) -> str:
 
     index = load_index(root)
     if not index.entries:
-        return (
-            f"{len(record_files)} records found but none could be indexed — "
-            "check record format (each needs a '# DR-NNNN: Title' heading)."
-        )
+        return f"{len(record_files)} records found but none could be indexed — check record format (each needs a '# DR-NNNN: Title' heading)."
 
     return "No decisions matched this query above the relevance threshold."
 
@@ -53,7 +51,7 @@ def _status_marker(status: str) -> str:
         return ""
     if status == "deferred":
         return "⏸ NOT YET DECIDED"
-    m = re.search(r'superseded by\s+(DR-\d+)', status, re.I)
+    m = re.search(r"superseded by\s+(DR-\d+)", status, re.I)
     if m:
         return f"⚠ SUPERSEDED BY {m.group(1).upper()}"
     return "⚠ SUPERSEDED"
@@ -62,6 +60,7 @@ def _status_marker(status: str) -> str:
 # ---------------------------------------------------------------------------
 # hippocampus_query
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def hippocampus_query(query_text: str, top_n: int = 5) -> str:
@@ -273,7 +272,7 @@ def hippocampus_log(
             raw = json.loads(relationships)
             rels = [Relationship(type=r["type"], target=r["target"]) for r in raw]
         except (json.JSONDecodeError, KeyError) as e:
-            return f"Error parsing relationships JSON: {e}\nExpected: '[{{\"type\":\"depends-on\",\"target\":\"DR-0001\"}}]'"
+            return f'Error parsing relationships JSON: {e}\nExpected: \'[{{"type":"depends-on","target":"DR-0001"}}]\''
 
     alts: list[str] = []
     if alternatives:
@@ -299,20 +298,31 @@ def hippocampus_log(
                 '"Redis streams — no durability guarantee we need"]\'.'
             )
         file_path = write_heavy_record(
-            settings.ROOT, description, classification,
-            title=title, why=why, trade_off=trade_off,
-            relationships=rels, review_trigger=review_trigger, alternatives=alts,
+            settings.ROOT,
+            description,
+            classification,
+            title=title,
+            why=why,
+            trade_off=trade_off,
+            relationships=rels,
+            review_trigger=review_trigger,
+            alternatives=alts,
         )
     else:
         file_path = write_standard_record(
-            settings.ROOT, description, classification,
-            title=title, why=why, trade_off=trade_off,
-            relationships=rels, alternatives=alts,
+            settings.ROOT,
+            description,
+            classification,
+            title=title,
+            why=why,
+            trade_off=trade_off,
+            relationships=rels,
+            alternatives=alts,
         )
 
     # Extract the new DR-NNNN from the written file path
     fname = Path(file_path).name
-    new_id_match = re.match(r'^(\d{4})-', fname)
+    new_id_match = re.match(r"^(\d{4})-", fname)
     new_dr_id = f"DR-{new_id_match.group(1)}" if new_id_match else "DR-????"
 
     # Apply supersedes side-effects
@@ -334,6 +344,7 @@ def hippocampus_log(
 # ---------------------------------------------------------------------------
 # hippocampus_classify
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def hippocampus_classify(description: str) -> str:
@@ -357,6 +368,7 @@ def hippocampus_classify(description: str) -> str:
 # hippocampus_list
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = None) -> str:
     """List all decision records with inline Why and Depends-on.
@@ -374,16 +386,26 @@ def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = Non
         entries = [e for e in entries if e.weight.lower() == weight.lower()]
 
     if not entries:
-        filters = ", ".join(filter(None, [
-            f"category={category}" if category else None,
-            f"weight={weight}" if weight else None,
-        ]))
+        filters = ", ".join(
+            filter(
+                None,
+                [
+                    f"category={category}" if category else None,
+                    f"weight={weight}" if weight else None,
+                ],
+            )
+        )
         return f"No records match{' (' + filters + ')' if filters else ''}."
 
-    filter_desc = ", ".join(filter(None, [
-        f"category={category}" if category else None,
-        f"weight={weight}" if weight else None,
-    ]))
+    filter_desc = ", ".join(
+        filter(
+            None,
+            [
+                f"category={category}" if category else None,
+                f"weight={weight}" if weight else None,
+            ],
+        )
+    )
     header = f"Decision records{' (' + filter_desc + ')' if filter_desc else ''}:"
     lines = [header, "─" * 70]
 
@@ -517,10 +539,9 @@ def hippocampus_chain(dr_id: str) -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Hippocampus MCP server — codebase decision memory"
-    )
+    parser = argparse.ArgumentParser(description="Hippocampus MCP server — codebase decision memory")
     parser.add_argument(
         "--root",
         default=".",

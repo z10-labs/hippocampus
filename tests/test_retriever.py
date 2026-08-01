@@ -42,7 +42,9 @@ def test_a_hit_drags_in_what_it_depends_on(root):
     """Outbound expansion — the constraints behind the match."""
     write_record(root, "0001", "Event sourced core")
     write_record(
-        root, "0002", "Postgres ledger",
+        root,
+        "0002",
+        "Postgres ledger",
         body="## Relationships\n\n- depends-on: DR-0001\n",
     )
     build_index(root, force=True)
@@ -60,7 +62,9 @@ def test_a_hit_drags_in_what_depends_on_it(root):
     querying the thing you want to remove must surface what breaks."""
     write_record(root, "0001", "Redis for shared counters")
     write_record(
-        root, "0002", "Sliding window rate limiter",
+        root,
+        "0002",
+        "Sliding window rate limiter",
         body="## Relationships\n\n- depends-on: DR-0001\n",
     )
     build_index(root, force=True)
@@ -102,6 +106,7 @@ def test_rel_labels_are_human_readable():
 
 # --- status (WP-04) --------------------------------------------------------
 
+
 def test_results_carry_the_source_records_status(root):
     write_record(root, "0001", "Postgres ledger")
     build_index(root, force=True)
@@ -130,11 +135,13 @@ def test_a_superseded_record_is_demoted_below_an_accepted_one_at_equal_similarit
 # fake_embed's natural output or asserting against the MIN_DIRECT_SCORE
 # constant directly, so retuning that constant doesn't break these tests.
 
+
 def test_direct_hits_below_the_relevance_floor_are_filtered_out(root, monkeypatch):
     write_record(root, "0001", "Some record")
     build_index(root, force=True)
 
     from hippocampus import retriever
+
     monkeypatch.setattr(retriever, "_score_all", lambda matrix, q: [0.01] * len(matrix))
 
     assert query(root, "anything") == []
@@ -145,6 +152,7 @@ def test_min_score_override_is_respected(root, monkeypatch):
     build_index(root, force=True)
 
     from hippocampus import retriever
+
     monkeypatch.setattr(retriever, "_score_all", lambda matrix, q: [0.01] * len(matrix))
 
     # The default floor excludes this score; an explicit, lower override lets
@@ -156,7 +164,9 @@ def test_min_score_override_is_respected(root, monkeypatch):
 def test_a_relationship_expanded_result_at_score_zero_is_exempt_from_the_floor(root, monkeypatch):
     write_record(root, "0001", "Event sourced core")
     write_record(
-        root, "0002", "Postgres ledger",
+        root,
+        "0002",
+        "Postgres ledger",
         body="## Relationships\n\n- depends-on: DR-0001\n",
     )
     build_index(root, force=True)
@@ -186,6 +196,7 @@ def test_a_relationship_expanded_result_at_score_zero_is_exempt_from_the_floor(r
 
 # --- numpy scoring parity (WP-07) -------------------------------------------
 
+
 def test_vectorized_scoring_matches_the_reference_cosine_implementation():
     random.seed(42)
     raw_vectors = [[random.uniform(-1, 1) for _ in range(16)] for _ in range(10)]
@@ -193,10 +204,19 @@ def test_vectorized_scoring_matches_the_reference_cosine_implementation():
 
     entries = [
         IndexEntry(
-            id=f"DR-{i:04d}", title="t", category="architectural", status="accepted",
-            weight="standard", date="2026-01-01", file_path="x.md",
-            relationships=[], reverse_links=[], embedding=_normalize(v),
-            document="", why="", alternatives="",
+            id=f"DR-{i:04d}",
+            title="t",
+            category="architectural",
+            status="accepted",
+            weight="standard",
+            date="2026-01-01",
+            file_path="x.md",
+            relationships=[],
+            reverse_links=[],
+            embedding=_normalize(v),
+            document="",
+            why="",
+            alternatives="",
         )
         for i, v in enumerate(raw_vectors)
     ]

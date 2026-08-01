@@ -1,17 +1,17 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass
 class Relationship:
-    type: str   # depends-on | supersedes | conflicts-with
+    type: str  # depends-on | supersedes | conflicts-with
     target: str  # DR-NNNN
 
 
 @dataclass
 class ReverseLink:
-    type: str    # depended-on-by | superseded-by | conflicts-with
+    type: str  # depended-on-by | superseded-by | conflicts-with
     source: str  # DR-NNNN
 
 

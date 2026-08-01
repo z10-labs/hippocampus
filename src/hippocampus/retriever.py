@@ -123,21 +123,23 @@ def query(
             if not related:
                 continue
             seen.add(rel.target)
-            results.append(RetrievalResult(
-                id=rel.target,
-                title=related.title,
-                file_path=related.file_path,
-                score=0.0,
-                surfaced_via="relationship",
-                relationship_type=rel.type,
-                relevance_note=f"{_rel_label(rel.type)} {e.id}",
-                why=related.why,
-                alternatives=related.alternatives,
-                category=related.category,
-                weight=related.weight,
-                depends_on=[r.target for r in related.relationships if r.type == "depends-on"],
-                status=related.status,
-            ))
+            results.append(
+                RetrievalResult(
+                    id=rel.target,
+                    title=related.title,
+                    file_path=related.file_path,
+                    score=0.0,
+                    surfaced_via="relationship",
+                    relationship_type=rel.type,
+                    relevance_note=f"{_rel_label(rel.type)} {e.id}",
+                    why=related.why,
+                    alternatives=related.alternatives,
+                    category=related.category,
+                    weight=related.weight,
+                    depends_on=[r.target for r in related.relationships if r.type == "depends-on"],
+                    status=related.status,
+                )
+            )
 
     # Inbound relationship expansion (reverse links — bidirectional)
     for e, _ in top:
@@ -148,21 +150,23 @@ def query(
             if not related:
                 continue
             seen.add(rev.source)
-            results.append(RetrievalResult(
-                id=rev.source,
-                title=related.title,
-                file_path=related.file_path,
-                score=0.0,
-                surfaced_via="relationship",
-                relationship_type=rev.type,
-                relevance_note=f"{_rel_label(rev.type)} {e.id}",
-                why=related.why,
-                alternatives=related.alternatives,
-                category=related.category,
-                weight=related.weight,
-                depends_on=[r.target for r in related.relationships if r.type == "depends-on"],
-                status=related.status,
-            ))
+            results.append(
+                RetrievalResult(
+                    id=rev.source,
+                    title=related.title,
+                    file_path=related.file_path,
+                    score=0.0,
+                    surfaced_via="relationship",
+                    relationship_type=rev.type,
+                    relevance_note=f"{_rel_label(rev.type)} {e.id}",
+                    why=related.why,
+                    alternatives=related.alternatives,
+                    category=related.category,
+                    weight=related.weight,
+                    depends_on=[r.target for r in related.relationships if r.type == "depends-on"],
+                    status=related.status,
+                )
+            )
 
     # Soft related-to: high similarity entries not yet included. Compared
     # against the effective score, consistent with the sort key above, so
@@ -173,21 +177,23 @@ def query(
         if eff < SOFT_RELATED_THRESHOLD:
             break
         seen.add(e.id)
-        results.append(RetrievalResult(
-            id=e.id,
-            title=e.title,
-            file_path=e.file_path,
-            score=eff,
-            surfaced_via="relationship",
-            relationship_type="related-to",
-            relevance_note=f"Related (similarity: {eff:.3f})",
-            why=e.why,
-            alternatives=e.alternatives,
-            category=e.category,
-            weight=e.weight,
-            depends_on=[r.target for r in e.relationships if r.type == "depends-on"],
-            status=e.status,
-        ))
+        results.append(
+            RetrievalResult(
+                id=e.id,
+                title=e.title,
+                file_path=e.file_path,
+                score=eff,
+                surfaced_via="relationship",
+                relationship_type="related-to",
+                relevance_note=f"Related (similarity: {eff:.3f})",
+                why=e.why,
+                alternatives=e.alternatives,
+                category=e.category,
+                weight=e.weight,
+                depends_on=[r.target for r in e.relationships if r.type == "depends-on"],
+                status=e.status,
+            )
+        )
 
     return results
 

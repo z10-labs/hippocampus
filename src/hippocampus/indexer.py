@@ -38,6 +38,7 @@ def _get_model():
     global _model
     if _model is None:
         from fastembed import TextEmbedding
+
         _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return _model
 
@@ -127,10 +128,7 @@ def embeddings_matrix(root: Path) -> np.ndarray:
     if cached is not None and cached[0] == file_mtime:
         return cached[1]
 
-    matrix = (
-        np.asarray([e.embedding for e in index.entries], dtype=np.float32)
-        if index.entries else np.zeros((0, 0), dtype=np.float32)
-    )
+    matrix = np.asarray([e.embedding for e in index.entries], dtype=np.float32) if index.entries else np.zeros((0, 0), dtype=np.float32)
     _matrix_cache[path] = (file_mtime, matrix)
     return matrix
 
@@ -140,11 +138,15 @@ def _save_index(root: Path, index: VectorIndex) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # No indent: this is a gitignored derived cache nobody reads by hand,
     # and indent=2 was most of the file size on lists of 384 floats.
-    path.write_text(json.dumps({
-        "version": INDEX_SCHEMA_VERSION,
-        "built_at": index.built_at,
-        "entries": [asdict(e) for e in index.entries],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "version": INDEX_SCHEMA_VERSION,
+                "built_at": index.built_at,
+                "entries": [asdict(e) for e in index.entries],
+            }
+        )
+    )
     _index_cache[path] = (path.stat().st_mtime, index)
 
 
@@ -157,58 +159,58 @@ def _deferred_path(root: Path) -> Path:
 
 
 def _field(content: str, name: str, default: str = "") -> str:
-    m = re.search(rf'\*\*{name}\*\*:\s*(.+)', content)
+    m = re.search(rf"\*\*{name}\*\*:\s*(.+)", content)
     return m.group(1).strip() if m else default
 
 
 def _parse_relationships(content: str) -> list[Relationship]:
-    section_match = re.search(r'## Relationships\n([\s\S]*?)(?:\n##|$)', content)
+    section_match = re.search(r"## Relationships\n([\s\S]*?)(?:\n##|$)", content)
     explicit: list[Relationship] = []
     if section_match:
         for line in section_match.group(1).splitlines():
-            m = re.match(r'[-*]\s*(overrides|inferred-by|depends-on|supersedes|conflicts-with|references):\s*(DR-\d+)', line, re.I)
+            m = re.match(r"[-*]\s*(overrides|inferred-by|depends-on|supersedes|conflicts-with|references):\s*(DR-\d+)", line, re.I)
             if m:
                 explicit.append(Relationship(type=m.group(1).lower(), target=m.group(2).upper()))
 
     # Prose fallback: scan Why/What/Context/Decision for bare DR-NNNN mentions.
     # Only add as 'references' if the target isn't already covered by an explicit link.
     explicit_targets = {r.target for r in explicit}
-    body_match = re.search(r'## (?:Why|What|Context|Decision)\n([\s\S]*?)(?:\n##|$)', content)
+    body_match = re.search(r"## (?:Why|What|Context|Decision)\n([\s\S]*?)(?:\n##|$)", content)
     prose_refs: list[Relationship] = []
     if body_match:
-        for dr_id in dict.fromkeys(re.findall(r'\bDR-\d{4}\b', body_match.group(1))):
+        for dr_id in dict.fromkeys(re.findall(r"\bDR-\d{4}\b", body_match.group(1))):
             if dr_id not in explicit_targets:
-                prose_refs.append(Relationship(type='references', target=dr_id))
+                prose_refs.append(Relationship(type="references", target=dr_id))
 
     return explicit + prose_refs
 
 
 def _parse_why(content: str) -> str:
-    m = re.search(r'## (?:Why|Context)\n([\s\S]*?)(?:\n##|$)', content)
+    m = re.search(r"## (?:Why|Context)\n([\s\S]*?)(?:\n##|$)", content)
     if not m:
         return ""
-    text = re.sub(r'\s+', ' ', m.group(1).strip())
+    text = re.sub(r"\s+", " ", m.group(1).strip())
     return text[:217] + "…" if len(text) > 220 else text
 
 
 def _parse_alternatives(content: str) -> str:
-    m = re.search(r'## Alternatives(?:\s+(?:Skipped|Considered))?\n([\s\S]*?)(?:\n##|$)', content)
+    m = re.search(r"## Alternatives(?:\s+(?:Skipped|Considered))?\n([\s\S]*?)(?:\n##|$)", content)
     if not m:
         return ""
     lines = []
     for line in m.group(1).splitlines():
         stripped = line.strip()
-        bullet = re.match(r'^(?:[-*]|\d+\.)\s+(.+)', stripped)
+        bullet = re.match(r"^(?:[-*]|\d+\.)\s+(.+)", stripped)
         if bullet:
             body = bullet.group(1).strip()
-            if not re.match(r'^because\b', body, re.I):
+            if not re.match(r"^because\b", body, re.I):
                 lines.append(body[:80])
     return "\n".join(lines)
 
 
 def _parse_file(path: Path) -> Optional[dict]:
     content = path.read_text()
-    id_match = re.match(r'^# (DR-\d+):\s*(.+)', content, re.M)
+    id_match = re.match(r"^# (DR-\d+):\s*(.+)", content, re.M)
     if not id_match:
         return None
     return {
@@ -232,10 +234,10 @@ def _reverse_type(rel_type: str) -> str:
         "conflicts-with": "conflicts-with",
         "overrides": "overridden-by",
         "inferred-by": "infers",
-    }.get(rel_type, f"linked-from")
+    }.get(rel_type, "linked-from")
 
 
-_DEFERRED_HEADING_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2}) — (.+)$', re.M)
+_DEFERRED_HEADING_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2}) — (.+)$", re.M)
 
 
 def _parse_deferred_blocks(root: Path) -> list[dict]:
@@ -248,14 +250,16 @@ def _parse_deferred_blocks(root: Path) -> list[dict]:
     blocks = []
     for i, m in enumerate(headings):
         block_end = headings[i + 1].start() if i + 1 < len(headings) else len(content)
-        block = content[m.end():block_end]
-        blocks.append({
-            "date": m.group(1),
-            "title": m.group(2).strip(),
-            "what": _field(block, "What was deferred"),
-            "why": _field(block, "Why deferred"),
-            "review_trigger": _field(block, "Review trigger"),
-        })
+        block = content[m.end() : block_end]
+        blocks.append(
+            {
+                "date": m.group(1),
+                "title": m.group(2).strip(),
+                "what": _field(block, "What was deferred"),
+                "why": _field(block, "Why deferred"),
+                "review_trigger": _field(block, "Review trigger"),
+            }
+        )
     return blocks
 
 
@@ -272,21 +276,23 @@ def _build_deferred_entries(root: Path) -> list[IndexEntry]:
             trigger = block["review_trigger"].rstrip(".")
             why = f"{why} Review trigger: {trigger}."
         document = f"{block['title']}\n\n{block['what'] or block['title']}"
-        entries.append(IndexEntry(
-            id=f"DEF-{i + 1:04d}",
-            title=block["title"],
-            category="",
-            status="deferred",
-            weight="deferred",
-            date=block["date"],
-            file_path=file_path,
-            relationships=[],
-            reverse_links=[],
-            embedding=_normalize(embed(document)),
-            document=document,
-            why=why,
-            alternatives="",
-        ))
+        entries.append(
+            IndexEntry(
+                id=f"DEF-{i + 1:04d}",
+                title=block["title"],
+                category="",
+                status="deferred",
+                weight="deferred",
+                date=block["date"],
+                file_path=file_path,
+                relationships=[],
+                reverse_links=[],
+                embedding=_normalize(embed(document)),
+                document=document,
+                why=why,
+                alternatives="",
+            )
+        )
     return entries
 
 
