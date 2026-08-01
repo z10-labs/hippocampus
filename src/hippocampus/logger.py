@@ -235,6 +235,7 @@ def apply_supersedes(root: Path, new_dr_id: str, target_dr_id: str) -> bool:
         r'(\*\*Status\*\*:\s*).*',
         f'\\1superseded by {new_dr_id}',
         content,
+        count=1,
     )
     if updated != content:
         target_file.write_text(updated)

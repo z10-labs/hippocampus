@@ -130,3 +130,19 @@ def test_supersedes_flips_the_target_status_in_place(root):
 
 def test_supersedes_on_a_missing_target_reports_failure(root):
     assert apply_supersedes(root, "DR-0021", "DR-9999") is False
+
+
+def test_supersedes_only_patches_the_header_status_line(root):
+    write_record(
+        root, "0002", "Redis Streams", status="accepted",
+        body="## Why\n\nExample record body that happens to quote another "
+             "record's header:\n\n> **Status**: accepted\n",
+    )
+
+    assert apply_supersedes(root, "DR-0021", "DR-0002") is True
+
+    content = (root / ".decisions" / "records" / "0002-redis-streams.md").read_text()
+    assert content.count("superseded by DR-0021") == 1
+    assert "**Status**: superseded by DR-0021" in content
+    # The quoted example line in the body must survive untouched.
+    assert "> **Status**: accepted" in content
