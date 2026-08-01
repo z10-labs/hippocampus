@@ -11,8 +11,10 @@ SOFT_RELATED_THRESHOLD = 0.80
 # Records that are no longer the live decision (superseded, deprecated, ...)
 # still carry historical value and are never filtered out, but should not
 # outrank a live record at equal similarity. Applied before the top-N cut.
+# "deferred" is exempt: an open question isn't dead history, it's a live
+# consideration the caller may still act on.
 SUPERSEDED_SCORE_MULTIPLIER = 0.5
-_LIVE_STATUSES = {"accepted", "proposed"}
+_LIVE_STATUSES = {"accepted", "proposed", "deferred"}
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
