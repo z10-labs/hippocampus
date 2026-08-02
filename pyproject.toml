@@ -64,7 +64,13 @@ line-length = 150
 select = ["E", "F", "W"]
 
 [tool.mypy]
-python_version = "3.11"
+# No explicit python_version: let mypy infer it from whichever interpreter
+# actually runs it. CI runs mypy across a 3.11/3.12 matrix (same job that
+# runs pytest) — pinning one version here made mypy assume 3.11 syntax
+# rules even under the 3.12 job, which broke when a newer numpy release's
+# bundled .pyi stubs started using the `type` statement (PEP 695, 3.12+
+# only): a real target/interpreter mismatch, not a numpy bug.
+#
 # Non-strict to start: the codebase is fully annotated already and mypy is
 # already clean under this config, but tightening (disallow_untyped_defs,
 # etc.) is deliberately deferred rather than chased in this pass — get the
