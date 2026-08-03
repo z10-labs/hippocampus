@@ -51,6 +51,22 @@ def test_record_with_no_relationships_says_so_explicitly(root):
     assert "- (none)" in open(path).read()
 
 
+def test_standard_record_with_no_alternatives_falls_back_to_the_placeholder(root):
+    path = write_standard_record(root, "some decision", STANDARD)
+    assert "_See description above._" in open(path).read()
+
+
+def test_standard_record_writes_one_bullet_per_alternative(root):
+    path = write_standard_record(
+        root, "sliding window limiter", STANDARD,
+        alternatives=["Token bucket — bursts at the window edge", "Fixed window — allows edge bursts"],
+    )
+    content = open(path).read()
+    assert "- Token bucket — bursts at the window edge" in content
+    assert "- Fixed window — allows edge bursts" in content
+    assert "_See description above._" not in content
+
+
 def test_heavy_record_adds_consequences_and_review_trigger(root):
     path = write_heavy_record(
         root, "mTLS between services", HEAVY,
@@ -61,6 +77,17 @@ def test_heavy_record_adds_consequences_and_review_trigger(root):
     assert "**Weight**: heavy" in content
     assert "## Consequences" in content
     assert "If we add a third-party service to the mesh" in content
+    assert "_No alternatives documented._" in content
+
+
+def test_heavy_record_writes_one_bullet_per_alternative(root):
+    path = write_heavy_record(
+        root, "mTLS between services", HEAVY,
+        alternatives=["No mTLS, VPC-only — insufficient given multi-tenant nodes"],
+    )
+    content = open(path).read()
+    assert "- No mTLS, VPC-only — insufficient given multi-tenant nodes" in content
+    assert "_No alternatives documented._" not in content
 
 
 def test_deferred_entries_append_rather_than_overwrite(root):

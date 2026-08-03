@@ -107,6 +107,7 @@ def hippocampus_log(
     why: Optional[str] = None,
     trade_off: Optional[str] = None,
     review_trigger: Optional[str] = None,
+    alternatives: Optional[str] = None,
 ) -> str:
     """Record an architectural decision. Two-phase flow:
 
@@ -124,6 +125,15 @@ def hippocampus_log(
     category options: architectural | domain | data | security | api |
       performance | dependency | testing | error-handling | state | naming |
       operational | compliance | cost | team | ux-product
+
+    alternatives — what was considered and rejected, as a JSON array of
+    strings: '["RabbitMQ — extra ops burden", "Redis streams — no durability
+    guarantee we need"]'. Each entry should name the option AND the reason it
+    was rejected ("option — reason"), not just the option name; a bare option
+    name is not useful to a future reader. Optional for standard records, but
+    encouraged — it is the whole point of recording a decision instead of
+    just the outcome. REQUIRED for heavy records: a heavy decision written
+    without alternatives is rejected in Phase 2.
     """
     classification = classify(description)
     if weight:
@@ -172,21 +182,39 @@ def hippocampus_log(
         except (json.JSONDecodeError, KeyError) as e:
             return f"Error parsing relationships JSON: {e}\nExpected: '[{{\"type\":\"depends-on\",\"target\":\"DR-0001\"}}]'"
 
+    alts: list[str] = []
+    if alternatives:
+        try:
+            raw_alts = json.loads(alternatives)
+            alts = [str(a) for a in raw_alts]
+        except json.JSONDecodeError as e:
+            return (
+                f"Error parsing alternatives JSON: {e}\n"
+                'Expected: \'["RabbitMQ — extra ops burden", "Redis streams — no durability guarantee we need"]\''
+            )
+
     if classification.weight == "deferred":
         file_path = write_deferred_entry(settings.ROOT, description)
         return f"Deferred decision recorded in: {file_path}"
 
     if classification.weight == "heavy":
+        if not alts:
+            return (
+                "Heavy decisions require documented alternatives — a heavy record with none "
+                "has no value to a future reader. Call again with alternatives as a JSON array "
+                'of strings, e.g. alternatives=\'["RabbitMQ — extra ops burden", '
+                '"Redis streams — no durability guarantee we need"]\'.'
+            )
         file_path = write_heavy_record(
             settings.ROOT, description, classification,
             title=title, why=why, trade_off=trade_off,
-            relationships=rels, review_trigger=review_trigger,
+            relationships=rels, review_trigger=review_trigger, alternatives=alts,
         )
     else:
         file_path = write_standard_record(
             settings.ROOT, description, classification,
             title=title, why=why, trade_off=trade_off,
-            relationships=rels,
+            relationships=rels, alternatives=alts,
         )
 
     # Extract the new DR-NNNN from the written file path

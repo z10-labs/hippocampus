@@ -51,6 +51,20 @@ def test_alternatives_drops_because_continuation_lines():
     assert _parse_alternatives(content) == "DynamoDB — no cross-partition txns"
 
 
+def test_alternatives_accepts_dash_star_and_numbered_bullets():
+    content = (
+        "## Alternatives Considered\n\n"
+        "- RabbitMQ — extra ops burden\n"
+        "* Redis streams — no durability guarantee\n"
+        "1. DynamoDB — no cross-partition txns\n"
+    )
+    assert _parse_alternatives(content) == (
+        "RabbitMQ — extra ops burden\n"
+        "Redis streams — no durability guarantee\n"
+        "DynamoDB — no cross-partition txns"
+    )
+
+
 def test_parse_file_returns_none_for_non_record(tmp_path):
     stray = tmp_path / "notes.md"
     stray.write_text("Just some notes, no DR heading.\n")

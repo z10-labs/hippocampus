@@ -105,8 +105,9 @@ def _parse_alternatives(content: str) -> str:
     lines = []
     for line in m.group(1).splitlines():
         stripped = line.strip()
-        if stripped.startswith("- ") and len(stripped) > 3:
-            body = stripped[2:].strip()
+        bullet = re.match(r'^(?:[-*]|\d+\.)\s+(.+)', stripped)
+        if bullet:
+            body = bullet.group(1).strip()
             if not re.match(r'^because\b', body, re.I):
                 lines.append(body[:80])
     return "\n".join(lines)
