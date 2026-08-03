@@ -9,7 +9,15 @@ import secrets
 from pathlib import Path
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+# mcp 2.0 renamed FastMCP to MCPServer and moved it from mcp.server.fastmcp to
+# mcp.server. Constructor signature, the zero-arg @mcp.tool() decorator, and
+# mcp.run() (defaults to stdio transport) are unchanged across the rename —
+# confirmed against a real mcp 2.0.0 install, not just the changelog. See
+# WP-12's decision record for what was and wasn't re-verified.
+try:
+    from mcp.server.fastmcp import FastMCP  # mcp < 2.0
+except ImportError:
+    from mcp.server import MCPServer as FastMCP  # type: ignore[attr-defined,no-redef]
 
 import hippocampus.settings as settings
 from hippocampus.classify import classify

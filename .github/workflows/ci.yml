@@ -39,7 +39,9 @@ jobs:
     # the broken 2.0.0) the day it shipped: `pip install .` from a checkout,
     # non-editable, resolves dependencies from pyproject.toml the same way
     # `pip install git+https://github.com/z10-labs/hippocampus.git` (the
-    # README's documented install command) does.
+    # README's documented install command) does. With no upper bound on mcp
+    # (WP-12), this now naturally resolves to the latest 2.x — see the
+    # mcp-1x job below for the other supported major version.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,5 +50,24 @@ jobs:
           python-version: "3.12"
       - name: Install exactly as the README instructs
         run: pip install .
+      - name: Verify the CLI entry point actually works
+        run: hippocampus-mcp --help
+
+  test-mcp-1x:
+    # server.py shims mcp 2.0's rename of FastMCP to MCPServer (WP-12), so
+    # both major versions are supported. The jobs above install with no
+    # upper bound and so only ever exercise the latest (2.x); this job
+    # pins mcp<2 explicitly so a future change that breaks the older half
+    # of the shim doesn't go unnoticed until someone on mcp 1.x reports it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with mcp pinned below 2.0
+        run: pip install -e ".[dev]" "mcp<2"
+      - name: Tests
+        run: pytest
       - name: Verify the CLI entry point actually works
         run: hippocampus-mcp --help

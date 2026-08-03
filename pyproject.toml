@@ -20,9 +20,10 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
 ]
 dependencies = [
-    # Pinned below 2.0: mcp 2.0.0 relocated `mcp.server.fastmcp`, breaking install.
-    # Remove this pin when WP-12 (port to the mcp 2.x API) lands.
-    "mcp>=1.0.0,<2",
+    # No upper bound: server.py shims the mcp 2.0.0 rename of FastMCP to
+    # MCPServer (mcp.server.fastmcp -> mcp.server), so both 1.x and 2.x work.
+    # See WP-12.
+    "mcp>=1.0.0",
     "fastembed>=0.4.0",
     "numpy>=1.26.0",
 ]
