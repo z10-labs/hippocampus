@@ -21,7 +21,7 @@ def _records_dir(root: Path) -> Path:
 def _next_id(root: Path) -> str:
     records_dir = _records_dir(root)
     records_dir.mkdir(parents=True, exist_ok=True)
-    files = [f for f in records_dir.iterdir() if re.match(r'^\d{4}-', f.name)]
+    files = [f for f in records_dir.iterdir() if re.match(r"^\d{4}-", f.name)]
     if not files:
         return "0001"
     max_id = max(int(f.name[:4]) for f in files)
@@ -51,9 +51,7 @@ def _with_lock(root: Path, fn):
                 break
             except BlockingIOError:
                 if time.monotonic() > deadline:
-                    raise RuntimeError(
-                        f"Could not acquire decision log lock ({lock_path}) within 5 seconds"
-                    )
+                    raise RuntimeError(f"Could not acquire decision log lock ({lock_path}) within 5 seconds")
                 time.sleep(0.05)
         try:
             return fn()
@@ -62,7 +60,7 @@ def _with_lock(root: Path, fn):
 
 
 def _slug(title: str) -> str:
-    s = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return s[:50]
 
 
@@ -233,14 +231,14 @@ def apply_supersedes(root: Path, new_dr_id: str, target_dr_id: str) -> bool:
     if not matches:
         # Try loose match by ID prefix
         num = target_dr_id.replace("DR-", "").lstrip("0") or "0"
-        matches = [f for f in records_dir.glob("*.md") if re.match(rf'^0*{num}-', f.name)]
+        matches = [f for f in records_dir.glob("*.md") if re.match(rf"^0*{num}-", f.name)]
     if not matches:
         return False
     target_file = matches[0]
     content = target_file.read_text()
     updated = re.sub(
-        r'(\*\*Status\*\*:\s*).*',
-        f'\\1superseded by {new_dr_id}',
+        r"(\*\*Status\*\*:\s*).*",
+        f"\\1superseded by {new_dr_id}",
         content,
         count=1,
     )

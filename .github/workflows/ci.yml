@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly rather than only on push: this repo's realistic breakage mode
+    # is an upstream dependency (mcp, fastembed) moving underneath it, not a
+    # bad commit here — see WP-01, which a scheduled job would have caught
+    # the day mcp 2.0 shipped and broke the documented install.
+    - cron: "0 6 * * 1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: Tests with coverage
+        run: pytest --cov=src --cov-report=term-missing
+      - name: mypy
+        run: mypy src/
+
+  install-from-clean-checkout:
+    # This is the job that would have caught WP-01 (mcp>=1.0.0 resolving to
+    # the broken 2.0.0) the day it shipped: `pip install .` from a checkout,
+    # non-editable, resolves dependencies from pyproject.toml the same way
+    # `pip install git+https://github.com/z10-labs/hippocampus.git` (the
+    # README's documented install command) does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install exactly as the README instructs
+        run: pip install .
+      - name: Verify the CLI entry point actually works
+        run: hippocampus-mcp --help

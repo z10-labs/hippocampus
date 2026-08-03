@@ -35,10 +35,7 @@ def test_bare_dr_mention_in_prose_becomes_a_reference():
 
 
 def test_prose_mention_does_not_duplicate_an_explicit_link():
-    content = (
-        "## Why\n\nSupersedes DR-0002 because it never scaled.\n\n"
-        "## Relationships\n\n- supersedes: DR-0002\n"
-    )
+    content = "## Why\n\nSupersedes DR-0002 because it never scaled.\n\n## Relationships\n\n- supersedes: DR-0002\n"
     rels = _parse_relationships(content)
     assert [(r.type, r.target) for r in rels] == [("supersedes", "DR-0002")]
 
@@ -63,9 +60,7 @@ def test_alternatives_accepts_dash_star_and_numbered_bullets():
         "1. DynamoDB — no cross-partition txns\n"
     )
     assert _parse_alternatives(content) == (
-        "RabbitMQ — extra ops burden\n"
-        "Redis streams — no durability guarantee\n"
-        "DynamoDB — no cross-partition txns"
+        "RabbitMQ — extra ops burden\nRedis streams — no durability guarantee\nDynamoDB — no cross-partition txns"
     )
 
 
@@ -123,6 +118,7 @@ def test_load_index_on_missing_file_is_empty_not_an_error(tmp_path):
 
 # --- deletion --------------------------------------------------------------
 
+
 def test_build_index_prunes_records_whose_file_was_deleted(root):
     path = write_record(root, "0001", "Event sourced core")
     write_record(root, "0002", "Postgres ledger")
@@ -150,6 +146,7 @@ def test_deleting_a_dependency_does_not_leave_a_phantom_relationship(root):
 
 
 # --- ensure_index ------------------------------------------------------------
+
 
 def test_ensure_index_builds_from_scratch_on_cold_start(root):
     write_record(root, "0001", "Event sourced core")
@@ -213,6 +210,7 @@ def test_ensure_index_does_not_rebuild_when_nothing_changed(root, monkeypatch):
 
 
 # --- deferred indexing (WP-05) ---------------------------------------------
+
 
 def test_build_index_assigns_sequential_def_ids_to_deferred_blocks(root):
     write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
@@ -279,6 +277,7 @@ def test_ensure_index_picks_up_a_new_deferral_with_no_records_dir_change(root):
 
 # --- schema versioning and caching (WP-07) ----------------------------------
 
+
 def test_load_index_treats_a_missing_version_as_no_index(tmp_path):
     path = _index_path(tmp_path)
     path.parent.mkdir(parents=True)
@@ -293,11 +292,15 @@ def test_load_index_treats_a_missing_version_as_no_index(tmp_path):
 def test_load_index_treats_a_mismatched_version_as_no_index(tmp_path):
     path = _index_path(tmp_path)
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({
-        "version": INDEX_SCHEMA_VERSION - 1,
-        "built_at": 999999999999,
-        "entries": [{"id": "DR-0001"}],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "version": INDEX_SCHEMA_VERSION - 1,
+                "built_at": 999999999999,
+                "entries": [{"id": "DR-0001"}],
+            }
+        )
+    )
 
     index = load_index(tmp_path)
     assert index.entries == []

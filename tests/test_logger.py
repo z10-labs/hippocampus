@@ -84,7 +84,9 @@ def test_slug_is_filesystem_safe_and_bounded():
 
 def test_standard_record_carries_the_relationship_block(root):
     path = write_standard_record(
-        root, "sliding window limiter", STANDARD,
+        root,
+        "sliding window limiter",
+        STANDARD,
         title="Sliding window limiter",
         why="Token bucket bursts at the window edge",
         relationships=[Relationship(type="depends-on", target="DR-0006")],
@@ -108,7 +110,9 @@ def test_standard_record_with_no_alternatives_falls_back_to_the_placeholder(root
 
 def test_standard_record_writes_one_bullet_per_alternative(root):
     path = write_standard_record(
-        root, "sliding window limiter", STANDARD,
+        root,
+        "sliding window limiter",
+        STANDARD,
         alternatives=["Token bucket — bursts at the window edge", "Fixed window — allows edge bursts"],
     )
     content = open(path).read()
@@ -119,7 +123,9 @@ def test_standard_record_writes_one_bullet_per_alternative(root):
 
 def test_heavy_record_adds_consequences_and_review_trigger(root):
     path = write_heavy_record(
-        root, "mTLS between services", HEAVY,
+        root,
+        "mTLS between services",
+        HEAVY,
         title="mTLS between services",
         review_trigger="If we add a third-party service to the mesh",
     )
@@ -132,7 +138,9 @@ def test_heavy_record_adds_consequences_and_review_trigger(root):
 
 def test_heavy_record_writes_one_bullet_per_alternative(root):
     path = write_heavy_record(
-        root, "mTLS between services", HEAVY,
+        root,
+        "mTLS between services",
+        HEAVY,
         alternatives=["No mTLS, VPC-only — insufficient given multi-tenant nodes"],
     )
     content = open(path).read()
@@ -158,7 +166,8 @@ def test_deferred_entry_with_no_why_or_trigger_falls_back_to_placeholders(root):
 
 def test_deferred_entry_records_why_and_review_trigger_when_supplied(root):
     path = write_deferred_entry(
-        root, "sharding, revisit at 10M rows",
+        root,
+        "sharding, revisit at 10M rows",
         why="Premature at current scale.",
         review_trigger="user table crosses 10M rows.",
     )
@@ -184,9 +193,11 @@ def test_supersedes_on_a_missing_target_reports_failure(root):
 
 def test_supersedes_only_patches_the_header_status_line(root):
     write_record(
-        root, "0002", "Redis Streams", status="accepted",
-        body="## Why\n\nExample record body that happens to quote another "
-             "record's header:\n\n> **Status**: accepted\n",
+        root,
+        "0002",
+        "Redis Streams",
+        status="accepted",
+        body="## Why\n\nExample record body that happens to quote another record's header:\n\n> **Status**: accepted\n",
     )
 
     assert apply_supersedes(root, "DR-0021", "DR-0002") is True

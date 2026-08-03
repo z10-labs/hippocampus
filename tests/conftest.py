@@ -4,6 +4,7 @@ The real embedding model is a ~30MB download and is slow to load. Tests stub it
 with a deterministic bag-of-words vector so they stay offline and fast — the
 retrieval logic under test is the graph expansion, not the model itself.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,12 +51,5 @@ def root(tmp_path):
 
 def write_record(root, num, title, body="", category="architectural", weight="standard", status="accepted"):
     path = root / ".decisions" / "records" / f"{num}-{title.lower().replace(' ', '-')}.md"
-    path.write_text(
-        f"# DR-{num}: {title}\n\n"
-        f"**Date**: 2026-01-01\n"
-        f"**Category**: {category}\n"
-        f"**Status**: {status}\n"
-        f"**Weight**: {weight}\n\n"
-        f"{body}\n"
-    )
+    path.write_text(f"# DR-{num}: {title}\n\n**Date**: 2026-01-01\n**Category**: {category}\n**Status**: {status}\n**Weight**: {weight}\n\n{body}\n")
     return path
