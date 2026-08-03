@@ -1,6 +1,9 @@
+import json
 import os
 
 from hippocampus.indexer import (
+    INDEX_SCHEMA_VERSION,
+    _index_path,
     _parse_alternatives,
     _parse_file,
     _parse_relationships,
@@ -272,3 +275,75 @@ def test_ensure_index_picks_up_a_new_deferral_with_no_records_dir_change(root):
 
     ids = [e.id for e in load_index(root).entries]
     assert ids == ["DEF-0001"]
+
+
+# --- schema versioning and caching (WP-07) ----------------------------------
+
+def test_load_index_treats_a_missing_version_as_no_index(tmp_path):
+    path = _index_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    # Old (pre-WP-07) on-disk shape: no "version" key at all.
+    path.write_text(json.dumps({"built_at": 999999999999, "entries": [{"id": "DR-0001"}]}))
+
+    index = load_index(tmp_path)
+    assert index.entries == []
+    assert index.built_at == 0
+
+
+def test_load_index_treats_a_mismatched_version_as_no_index(tmp_path):
+    path = _index_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "version": INDEX_SCHEMA_VERSION - 1,
+        "built_at": 999999999999,
+        "entries": [{"id": "DR-0001"}],
+    }))
+
+    index = load_index(tmp_path)
+    assert index.entries == []
+
+
+def test_build_index_recovers_from_an_old_schema_version_instead_of_raising(root):
+    write_record(root, "0001", "Some record")
+    path = _index_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # An old-shape file with a built_at far in the future would, without the
+    # version check, either KeyError on a missing field or wrongly skip the
+    # record as "already indexed and unchanged".
+    path.write_text(json.dumps({"version": INDEX_SCHEMA_VERSION - 1, "built_at": 999999999999}))
+
+    stats = build_index(root, force=False)
+    assert stats["indexed"] == 1
+    assert [e.id for e in load_index(root).entries] == ["DR-0001"]
+
+
+def test_load_index_cache_does_not_serve_stale_data_after_a_rebuild(root):
+    path = write_record(root, "0001", "Some title", body="## Why\n\nOriginal.\n")
+    build_index(root, force=True)
+    first = load_index(root)  # populates the in-memory cache
+    assert "Original." in first.entries[0].document
+
+    path.write_text(path.read_text().replace("Original.", "Updated."))
+    newer = (first.built_at / 1000) + 1
+    os.utime(path, (newer, newer))
+    build_index(root, force=True)  # _save_index must refresh the cache, not just the file
+
+    second = load_index(root)
+    assert "Updated." in second.entries[0].document
+
+
+def test_embeddings_matrix_does_not_serve_stale_data_after_a_rebuild(root):
+    from hippocampus.indexer import embeddings_matrix
+
+    write_record(root, "0001", "First record")
+    build_index(root, force=True)
+    first_matrix = embeddings_matrix(root)
+    assert first_matrix.shape[0] == 1
+
+    path = write_record(root, "0002", "Second record")
+    newer = (load_index(root).built_at / 1000) + 1
+    os.utime(path, (newer, newer))
+    build_index(root, force=True)
+
+    second_matrix = embeddings_matrix(root)
+    assert second_matrix.shape[0] == 2
