@@ -118,3 +118,61 @@ def test_a_superseded_record_is_demoted_below_an_accepted_one_at_equal_similarit
     # Both are surfaced — superseded records are demoted, never filtered out.
     assert set(by_id) == {"DR-0001", "DR-0002"}
     assert by_id["DR-0002"].score > by_id["DR-0001"].score
+
+
+# --- relevance floor (WP-06) -------------------------------------------------
+# Scores are injected via monkeypatching _cosine rather than relying on
+# fake_embed's natural output or asserting against the MIN_DIRECT_SCORE
+# constant directly, so retuning that constant doesn't break these tests.
+
+def test_direct_hits_below_the_relevance_floor_are_filtered_out(root, monkeypatch):
+    write_record(root, "0001", "Some record")
+    build_index(root, force=True)
+
+    from hippocampus import retriever
+    monkeypatch.setattr(retriever, "_cosine", lambda a, b: 0.01)
+
+    assert query(root, "anything") == []
+
+
+def test_min_score_override_is_respected(root, monkeypatch):
+    write_record(root, "0001", "Some record")
+    build_index(root, force=True)
+
+    from hippocampus import retriever
+    monkeypatch.setattr(retriever, "_cosine", lambda a, b: 0.01)
+
+    # The default floor excludes this score; an explicit, lower override lets
+    # the same result through.
+    results = query(root, "anything", min_score=0.0)
+    assert [r.id for r in results] == ["DR-0001"]
+
+
+def test_a_relationship_expanded_result_at_score_zero_is_exempt_from_the_floor(root, monkeypatch):
+    write_record(root, "0001", "Event sourced core")
+    write_record(
+        root, "0002", "Postgres ledger",
+        body="## Relationships\n\n- depends-on: DR-0001\n",
+    )
+    build_index(root, force=True)
+
+    from hippocampus import retriever
+    from hippocampus.indexer import load_index
+
+    entries = {e.id: e for e in load_index(root).entries}
+
+    def fake_cosine(q_emb, embedding):
+        # DR-0002 is the direct hit; DR-0001's raw similarity is forced to
+        # 0.0 — a score no direct hit could ever clear on its own.
+        if embedding == entries["DR-0002"].embedding:
+            return 0.9
+        return 0.0
+
+    monkeypatch.setattr(retriever, "_cosine", fake_cosine)
+
+    results = query(root, "Postgres ledger", top_n=1)
+    by_id = {r.id: r for r in results}
+
+    assert by_id["DR-0002"].surfaced_via == "direct"
+    assert by_id["DR-0001"].surfaced_via == "relationship"
+    assert by_id["DR-0001"].score == 0.0

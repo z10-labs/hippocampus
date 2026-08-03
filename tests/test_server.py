@@ -41,8 +41,9 @@ def test_query_flags_records_that_failed_to_parse(root):
 def test_query_says_nothing_matched_when_the_index_has_entries_but_none_qualify(root):
     write_record(root, "0001", "Postgres for the ledger")
     build_index(root, force=True)
-    # top_n=0 forces an empty result set against a non-empty index.
-    out = query_tool("Postgres for the ledger", top_n=0)
+    # No shared vocabulary with the indexed record — the relevance floor
+    # (WP-06) now filters this out on its own merits, no top_n trick needed.
+    out = query_tool("favorite pizza toppings for the team lunch")
     assert "No decisions matched this query above the relevance threshold" in out
 
 
@@ -60,10 +61,11 @@ def test_none_of_the_empty_state_messages_claim_no_constraints_apply(root):
 def test_query_finds_records_without_ever_calling_log_or_build_index(root):
     write_record(root, "0001", "Postgres for the ledger")
     write_record(root, "0002", "Redis for rate limiting")
-    # Cold start: no build_index call anywhere in this test.
-    out = query_tool("Postgres for the ledger")
-    assert "DR-0001" in out
-    assert "DR-0002" in out
+    # Cold start: no build_index call anywhere in this test. Query each with
+    # its own matching text — the two records aren't relevant to each other,
+    # and the relevance floor (WP-06) now correctly filters cross-matches.
+    assert "DR-0001" in query_tool("Postgres for the ledger")
+    assert "DR-0002" in query_tool("Redis for rate limiting")
 
 
 def test_query_reflects_a_hand_edited_record_without_a_manual_reindex(root):
@@ -133,7 +135,7 @@ def test_query_flags_deferred_entries_as_not_yet_decided(root):
     write_deferred_entry(root, "Multi-region replication, revisit post-MVP", why="Not enough data yet.")
     build_index(root, force=True)
 
-    out = query_tool("Multi-region replication")
+    out = query_tool("Multi-region replication, revisit post-MVP")
     def0001_line = next(line for line in out.splitlines() if line.startswith("DEF-0001"))
     assert "NOT YET DECIDED" in def0001_line
     assert "(deferred)" in def0001_line
