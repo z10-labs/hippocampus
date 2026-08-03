@@ -149,6 +149,7 @@ def build_index(root: Path, force: bool = False) -> dict:
     last_built = 0 if force else existing.built_at
     indexed = 0
     skipped = 0
+    seen_ids: set[str] = set()
 
     record_files = sorted(records_dir.glob("*.md")) if records_dir.exists() else []
 
@@ -157,6 +158,8 @@ def build_index(root: Path, force: bool = False) -> dict:
         parsed = _parse_file(file_path)
         if not parsed:
             continue
+
+        seen_ids.add(parsed["id"])
 
         if not force and mtime_ms <= last_built and parsed["id"] in by_id:
             skipped += 1
@@ -182,6 +185,13 @@ def build_index(root: Path, force: bool = False) -> dict:
         )
         indexed += 1
 
+    # Drop entries whose source file is gone. Reverse links are rebuilt from
+    # scratch below, so any dangling reference to a removed id heals itself.
+    removed = 0
+    for stale_id in set(by_id) - seen_ids:
+        del by_id[stale_id]
+        removed += 1
+
     # Build bidirectional reverse links across the full corpus
     reverse: dict[str, list[ReverseLink]] = {eid: [] for eid in by_id}
     for entry in by_id.values():
@@ -197,4 +207,29 @@ def build_index(root: Path, force: bool = False) -> dict:
         built_at=int(time.time() * 1000),
     )
     _save_index(root, new_index)
-    return {"indexed": indexed, "skipped": skipped, "total": len(by_id)}
+    return {"indexed": indexed, "skipped": skipped, "total": len(by_id), "removed": removed}
+
+
+def ensure_index(root: Path) -> None:
+    """Cheap freshness check, safe to call on every tool invocation.
+
+    Triggers an incremental rebuild if the index is missing, a record on disk
+    is newer than the last build, or the number of record files has changed
+    (a record was added or deleted). The incremental build already skips
+    unchanged files, so the common case costs a handful of stat() calls and
+    no embedding.
+    """
+    records_dir = _records_dir(root)
+    if not records_dir.exists():
+        return
+
+    record_files = list(records_dir.glob("*.md"))
+    index = load_index(root)
+    max_mtime_ms = max((int(f.stat().st_mtime * 1000) for f in record_files), default=0)
+
+    # `>=` rather than `>`: on filesystems with coarse mtime granularity, a
+    # record written in the same millisecond as the build must still count
+    # as stale. This also covers a missing index, since built_at is then 0.
+    stale = max_mtime_ms >= index.built_at or len(record_files) != len(index.entries)
+    if stale:
+        build_index(root, force=False)

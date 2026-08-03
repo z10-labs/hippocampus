@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 import hippocampus.settings as settings
 from hippocampus.classify import classify
-from hippocampus.indexer import build_index, load_index
+from hippocampus.indexer import build_index, ensure_index, load_index
 from hippocampus.logger import (
     apply_supersedes,
     write_deferred_entry,
@@ -21,6 +21,24 @@ from hippocampus.retriever import _rel_label, query
 from hippocampus.types import Relationship
 
 mcp = FastMCP("hippocampus")
+
+
+def _empty_state_message(root: Path) -> str:
+    """Distinguish why a query came back empty. The tool can only report what
+    it did or did not find — never assert that no constraints apply."""
+    records_dir = root / ".decisions" / "records"
+    record_files = list(records_dir.glob("*.md")) if records_dir.exists() else []
+    if not record_files:
+        return "No decision records exist yet in this project. Nothing has been recorded."
+
+    index = load_index(root)
+    if not index.entries:
+        return (
+            f"{len(record_files)} records found but none could be indexed — "
+            "check record format (each needs a '# DR-NNNN: Title' heading)."
+        )
+
+    return "No decisions matched this query above the relevance threshold."
 
 
 # ---------------------------------------------------------------------------
@@ -37,9 +55,10 @@ def hippocampus_query(query_text: str, top_n: int = 5) -> str:
     Returns ranked results with inline Why, Rejected alternatives, and
     Depends-on so you do not need to open record files.
     """
+    ensure_index(settings.ROOT)
     results = query(settings.ROOT, query_text, top_n)
     if not results:
-        return "No relevant decisions found. Proceed — no past constraints apply."
+        return _empty_state_message(settings.ROOT)
 
     lines = [f'Querying: "{query_text}"\n', "─" * 70]
     for r in results:
@@ -225,6 +244,7 @@ def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = Non
     Filter by category (e.g. 'data', 'security') or weight ('heavy', 'standard').
     Useful for discovering relevant precedent before starting work in an unfamiliar area.
     """
+    ensure_index(settings.ROOT)
     index = load_index(settings.ROOT)
     entries = index.entries
 
@@ -275,6 +295,7 @@ def hippocampus_chain(dr_id: str) -> str:
 
     Example: hippocampus_chain("DR-0015")
     """
+    ensure_index(settings.ROOT)
     dr_id = dr_id.upper()
     index = load_index(settings.ROOT)
     if not index.entries:
@@ -333,6 +354,10 @@ def main() -> None:
     # parse_known_args so MCP internal args don't cause failures
     args, _ = parser.parse_known_args()
     settings.ROOT = Path(args.root).resolve()
+    # Build/refresh the index up front so the first query of the session
+    # doesn't pay for it, and so a fresh clone with no index isn't read as
+    # "nothing has been decided" (see WP-02).
+    ensure_index(settings.ROOT)
     mcp.run()
 
 
