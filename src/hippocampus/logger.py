@@ -196,11 +196,24 @@ def write_heavy_record(
     return _with_lock(root, write)
 
 
-def write_deferred_entry(root: Path, description: str) -> str:
+def write_deferred_entry(
+    root: Path,
+    description: str,
+    why: Optional[str] = None,
+    review_trigger: Optional[str] = None,
+) -> str:
     today = _today()
+    why_text = (why or "Not documented").strip()
+    review_trigger_text = (review_trigger or "Not specified").strip()
     deferred_file = root / ".decisions" / "deferred.md"
     deferred_file.parent.mkdir(parents=True, exist_ok=True)
-    entry = f"\n---\n\n## {today} — {description[:60]}\n\n**What was deferred**: {description}\n**Why deferred**: Not documented\n**Review trigger**: Not specified\n**Risk of deferral**: Not documented\n"
+    entry = (
+        f"\n---\n\n## {today} — {description[:60]}\n\n"
+        f"**What was deferred**: {description}\n"
+        f"**Why deferred**: {why_text}\n"
+        f"**Review trigger**: {review_trigger_text}\n"
+        f"**Risk of deferral**: Not documented\n"
+    )
     with open(deferred_file, "a") as f:
         f.write(entry)
     return str(deferred_file)

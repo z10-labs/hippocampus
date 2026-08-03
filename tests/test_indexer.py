@@ -10,6 +10,7 @@ from hippocampus.indexer import (
     ensure_index,
     load_index,
 )
+from hippocampus.logger import write_deferred_entry
 from hippocampus.retriever import query
 
 from conftest import write_record
@@ -206,3 +207,65 @@ def test_ensure_index_does_not_rebuild_when_nothing_changed(root, monkeypatch):
     )
     ensure_index(root)
     assert calls == []
+
+
+# --- deferred indexing (WP-05) ---------------------------------------------
+
+def test_build_index_assigns_sequential_def_ids_to_deferred_blocks(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    write_deferred_entry(root, "Sharding the user table, revisit at 10M rows")
+
+    build_index(root, force=True)
+
+    ids = sorted(e.id for e in load_index(root).entries)
+    assert ids == ["DEF-0001", "DEF-0002"]
+
+
+def test_deferred_entries_are_marked_deferred_and_carry_no_category(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    build_index(root, force=True)
+
+    entry = load_index(root).entries[0]
+    assert entry.status == "deferred"
+    assert entry.weight == "deferred"
+    assert entry.category == ""
+
+
+def test_deferred_entries_do_not_participate_in_the_relationship_graph(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    build_index(root, force=True)
+
+    entry = load_index(root).entries[0]
+    assert entry.relationships == []
+    assert entry.reverse_links == []
+
+
+def test_both_deferrals_are_retrievable_by_query(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    write_deferred_entry(root, "Sharding the user table, revisit at 10M rows")
+    build_index(root, force=True)
+
+    results = query(root, "multi-region replication sharding user table")
+    ids = {r.id for r in results}
+    assert {"DEF-0001", "DEF-0002"} <= ids
+
+
+def test_a_dr_record_mentioning_a_def_id_in_prose_does_not_create_a_relationship(root):
+    """DEF- ids must never collide with the DR-\\d{4} shape _parse_relationships
+    matches — a prose mention of a deferral must not become a phantom link."""
+    write_record(root, "0001", "Event sourced core", body="## Why\n\nRelated to DEF-0001, but not a dependency.\n")
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+
+    stats = build_index(root, force=True)
+    assert stats["indexed"] == 1  # only the DR- record; deferred entries aren't counted here
+
+    entry = next(e for e in load_index(root).entries if e.id == "DR-0001")
+    assert entry.relationships == []
+
+
+def test_ensure_index_picks_up_a_new_deferral_with_no_records_dir_change(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    ensure_index(root)  # cold start — no build_index call yet
+
+    ids = [e.id for e in load_index(root).entries]
+    assert ids == ["DEF-0001"]

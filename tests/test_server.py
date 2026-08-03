@@ -7,6 +7,7 @@ import pytest
 
 import hippocampus.settings as settings
 from hippocampus.indexer import build_index, load_index
+from hippocampus.logger import write_deferred_entry
 from hippocampus.server import (
     hippocampus_chain as chain_tool,
     hippocampus_classify as classify_tool,
@@ -110,6 +111,13 @@ def test_query_flags_a_superseded_record_on_its_own_id_line(root):
         relationships=json.dumps([{"type": "supersedes", "target": "DR-0001"}]),
         alternatives=json.dumps(["Redis Streams — no consumer group replay"]),
     )
+    # log_tool's own incremental reindex can race apply_supersedes's rewrite
+    # of DR-0001 within the same millisecond (mtime truncates to int ms; see
+    # WP-02's implementer note), which is a genuine but separate flakiness in
+    # build_index's per-file skip check, not something this test should mask
+    # or exercise. Force a full rebuild so this test asserts rendering, not
+    # incremental-reindex timing.
+    build_index(root, force=True)
 
     out = query_tool("Redis Streams for events")
     dr0001_line = next(line for line in out.splitlines() if line.startswith("DR-0001"))
@@ -117,6 +125,45 @@ def test_query_flags_a_superseded_record_on_its_own_id_line(root):
     # The still-live superseding record must not carry the marker.
     dr0002_line = next(line for line in out.splitlines() if line.startswith("DR-0002"))
     assert "SUPERSEDED" not in dr0002_line
+
+
+# --- deferred (WP-05) -------------------------------------------------------
+
+def test_query_flags_deferred_entries_as_not_yet_decided(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP", why="Not enough data yet.")
+    build_index(root, force=True)
+
+    out = query_tool("Multi-region replication")
+    def0001_line = next(line for line in out.splitlines() if line.startswith("DEF-0001"))
+    assert "NOT YET DECIDED" in def0001_line
+    assert "(deferred)" in def0001_line
+
+
+def test_query_does_not_show_a_rejected_line_for_deferred_entries(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP", why="Not enough data yet.")
+    build_index(root, force=True)
+
+    out = query_tool("Multi-region replication")
+    assert "Rejected" not in out
+
+
+def test_list_filters_by_weight_deferred(root):
+    write_record(root, "0001", "Postgres ledger", weight="standard")
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    build_index(root, force=True)
+
+    out = list_tool(weight="deferred")
+    assert "DEF-0001" in out
+    assert "DR-0001" not in out
+
+
+def test_chain_on_a_deferred_id_does_not_crash(root):
+    write_deferred_entry(root, "Multi-region replication, revisit post-MVP")
+    build_index(root, force=True)
+
+    out = chain_tool("DEF-0001")
+    assert "DEF-0001" in out
+    assert "NOT YET DECIDED" in out
 
 
 # --- classify ------------------------------------------------------------
@@ -223,6 +270,19 @@ def test_log_routes_a_deferral_to_the_deferred_file(root):
     assert "Deferred decision recorded" in out
     assert "sharding" in (root / ".decisions" / "deferred.md").read_text()
     assert list((root / ".decisions" / "records").iterdir()) == []
+
+
+def test_log_persists_why_and_review_trigger_for_a_deferral(root):
+    log_tool(
+        "holding off on sharding until post-MVP",
+        confirmed=True,
+        why="Premature at current scale.",
+        review_trigger="user table crosses 10M rows.",
+    )
+
+    content = (root / ".decisions" / "deferred.md").read_text()
+    assert "**Why deferred**: Premature at current scale." in content
+    assert "**Review trigger**: user table crosses 10M rows." in content
 
 
 def test_explicit_weight_and_category_override_the_classifier(root):

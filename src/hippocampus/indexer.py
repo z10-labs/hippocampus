@@ -68,6 +68,15 @@ def _records_dir(root: Path) -> Path:
     return root / ".decisions" / "records"
 
 
+def _deferred_path(root: Path) -> Path:
+    return root / ".decisions" / "deferred.md"
+
+
+def _field(content: str, name: str, default: str = "") -> str:
+    m = re.search(rf'\*\*{name}\*\*:\s*(.+)', content)
+    return m.group(1).strip() if m else default
+
+
 def _parse_relationships(content: str) -> list[Relationship]:
     section_match = re.search(r'## Relationships\n([\s\S]*?)(?:\n##|$)', content)
     explicit: list[Relationship] = []
@@ -142,6 +151,61 @@ def _reverse_type(rel_type: str) -> str:
     }.get(rel_type, f"linked-from")
 
 
+_DEFERRED_HEADING_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2}) — (.+)$', re.M)
+
+
+def _parse_deferred_blocks(root: Path) -> list[dict]:
+    path = _deferred_path(root)
+    if not path.exists():
+        return []
+    content = path.read_text()
+    headings = list(_DEFERRED_HEADING_RE.finditer(content))
+
+    blocks = []
+    for i, m in enumerate(headings):
+        block_end = headings[i + 1].start() if i + 1 < len(headings) else len(content)
+        block = content[m.end():block_end]
+        blocks.append({
+            "date": m.group(1),
+            "title": m.group(2).strip(),
+            "what": _field(block, "What was deferred"),
+            "why": _field(block, "Why deferred"),
+            "review_trigger": _field(block, "Review trigger"),
+        })
+    return blocks
+
+
+def _build_deferred_entries(root: Path) -> list[IndexEntry]:
+    """Deferred decisions live in one shared deferred.md, not one file per
+    entry. DEF- ids never appear as relationship targets (only DR-\\d+ is
+    matched by _parse_relationships), so these entries participate in
+    retrieval but never in the dependency graph."""
+    file_path = str(_deferred_path(root).relative_to(root))
+    entries = []
+    for i, block in enumerate(_parse_deferred_blocks(root)):
+        why = block["why"]
+        if block["review_trigger"]:
+            trigger = block["review_trigger"].rstrip(".")
+            why = f"{why} Review trigger: {trigger}."
+        document = f"{block['title']}\n\n{block['what'] or block['title']}"
+        entries.append(IndexEntry(
+            id=f"DEF-{i + 1:04d}",
+            title=block["title"],
+            category="",
+            status="deferred",
+            weight="deferred",
+            date=block["date"],
+            file_path=file_path,
+            relationships=[],
+            reverse_links=[],
+            embedding=embed(document),
+            document=document,
+            why=why,
+            alternatives="",
+        ))
+    return entries
+
+
 def build_index(root: Path, force: bool = False) -> dict:
     records_dir = _records_dir(root)
     existing = VectorIndex(entries=[], built_at=0) if force else load_index(root)
@@ -186,12 +250,24 @@ def build_index(root: Path, force: bool = False) -> dict:
         )
         indexed += 1
 
-    # Drop entries whose source file is gone. Reverse links are rebuilt from
-    # scratch below, so any dangling reference to a removed id heals itself.
+    # Drop DR- entries whose source file is gone. Reverse links are rebuilt
+    # from scratch below, so any dangling reference to a removed id heals
+    # itself. Deferred (DEF-) entries are rebuilt separately below and are
+    # not subject to this per-file prune.
     removed = 0
-    for stale_id in set(by_id) - seen_ids:
+    stale_dr_ids = {eid for eid in by_id if eid.startswith("DR-")} - seen_ids
+    for stale_id in stale_dr_ids:
         del by_id[stale_id]
         removed += 1
+
+    # Deferred entries are cheap to re-derive in full from deferred.md on
+    # every build — there is no incremental-skip bookkeeping for them, and
+    # since they all live in one shared file there is no per-entry mtime to
+    # compare against anyway.
+    for stale_def_id in [eid for eid in by_id if eid.startswith("DEF-")]:
+        del by_id[stale_def_id]
+    for entry in _build_deferred_entries(root):
+        by_id[entry.id] = entry
 
     # Build bidirectional reverse links across the full corpus
     reverse: dict[str, list[ReverseLink]] = {eid: [] for eid in by_id}
@@ -214,23 +290,31 @@ def build_index(root: Path, force: bool = False) -> dict:
 def ensure_index(root: Path) -> None:
     """Cheap freshness check, safe to call on every tool invocation.
 
-    Triggers an incremental rebuild if the index is missing, a record on disk
-    is newer than the last build, or the number of record files has changed
-    (a record was added or deleted). The incremental build already skips
-    unchanged files, so the common case costs a handful of stat() calls and
-    no embedding.
+    Triggers an incremental rebuild if the index is missing, a record (or
+    deferred.md) on disk is newer than the last build, or the number of
+    records plus deferred entries has changed. The incremental build already
+    skips unchanged files, so the common case costs a handful of stat() calls
+    and no embedding.
     """
     records_dir = _records_dir(root)
-    if not records_dir.exists():
+    deferred_file = _deferred_path(root)
+    if not records_dir.exists() and not deferred_file.exists():
         return
 
-    record_files = list(records_dir.glob("*.md"))
+    record_files = list(records_dir.glob("*.md")) if records_dir.exists() else []
     index = load_index(root)
-    max_mtime_ms = max((int(f.stat().st_mtime * 1000) for f in record_files), default=0)
+
+    mtimes_ms = [int(f.stat().st_mtime * 1000) for f in record_files]
+    if deferred_file.exists():
+        mtimes_ms.append(int(deferred_file.stat().st_mtime * 1000))
+    max_mtime_ms = max(mtimes_ms, default=0)
+
+    deferred_count = len(_parse_deferred_blocks(root))
+    expected_total = len(record_files) + deferred_count
 
     # `>=` rather than `>`: on filesystems with coarse mtime granularity, a
     # record written in the same millisecond as the build must still count
     # as stale. This also covers a missing index, since built_at is then 0.
-    stale = max_mtime_ms >= index.built_at or len(record_files) != len(index.entries)
+    stale = max_mtime_ms >= index.built_at or expected_total != len(index.entries)
     if stale:
         build_index(root, force=False)

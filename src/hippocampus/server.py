@@ -46,9 +46,12 @@ def _status_marker(status: str) -> str:
     """A marker for the id line so a dead decision can't be skimmed past as
     if it were live. Superseded/deprecated records are never filtered out —
     they stay part of the history — but must not read identically to one
-    that is still in force."""
+    that is still in force. Deferred entries get their own marker: they are
+    not dead, they are an open question that was consciously not decided."""
     if status in ("accepted", "proposed"):
         return ""
+    if status == "deferred":
+        return "⏸ NOT YET DECIDED"
     m = re.search(r'superseded by\s+(DR-\d+)', status, re.I)
     if m:
         return f"⚠ SUPERSEDED BY {m.group(1).upper()}"
@@ -93,14 +96,17 @@ def hippocampus_query(query_text: str, top_n: int = 5) -> str:
             short = r.why[:160] + "…" if len(r.why) > 160 else r.why
             lines.append(f"  Why: {short}")
 
-        alts = (r.alternatives or "").strip()
-        if alts:
-            alt_lines = alts.splitlines()[:3]
-            lines.append(f"  Rejected: {alt_lines[0]}")
-            for a in alt_lines[1:]:
-                lines.append(f"            {a}")
-        else:
-            lines.append("  Rejected: (none documented)")
+        # Deferred entries were never a decision with rejected options — a
+        # "Rejected:" line on one would misrepresent an open question as one.
+        if r.weight != "deferred":
+            alts = (r.alternatives or "").strip()
+            if alts:
+                alt_lines = alts.splitlines()[:3]
+                lines.append(f"  Rejected: {alt_lines[0]}")
+                for a in alt_lines[1:]:
+                    lines.append(f"            {a}")
+            else:
+                lines.append("  Rejected: (none documented)")
 
         if r.depends_on:
             lines.append(f"  Depends on: {', '.join(r.depends_on)}")
@@ -152,6 +158,13 @@ def hippocampus_log(
     encouraged — it is the whole point of recording a decision instead of
     just the outcome. REQUIRED for heavy records: a heavy decision written
     without alternatives is rejected in Phase 2.
+
+    For a deferral (weight="deferred"), why and review_trigger are reused
+    to record why the decision was put off and what should trigger revisiting
+    it. A deferral with no review trigger never gets revisited, which makes
+    it a leak rather than a decision — supply one whenever there's a concrete
+    condition (a metric threshold, a milestone) that should prompt a second
+    look.
     """
     classification = classify(description)
     if weight:
@@ -212,7 +225,7 @@ def hippocampus_log(
             )
 
     if classification.weight == "deferred":
-        file_path = write_deferred_entry(settings.ROOT, description)
+        file_path = write_deferred_entry(settings.ROOT, description, why=why, review_trigger=review_trigger)
         return f"Deferred decision recorded in: {file_path}"
 
     if classification.weight == "heavy":
@@ -313,7 +326,8 @@ def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = Non
     lines = [header, "─" * 70]
 
     for e in sorted(entries, key=lambda x: x.id):
-        header = f"{e.id}  ({e.category} · {e.weight})  {e.date}"
+        meta = " · ".join(filter(None, [e.category, e.weight]))
+        header = f"{e.id}  ({meta})  {e.date}"
         status_marker = _status_marker(e.status)
         if status_marker:
             header += f"  {status_marker}"
@@ -366,7 +380,8 @@ def hippocampus_chain(dr_id: str) -> str:
             lines.append(f"{indent}{marker} {target_id}  (not in index)")
             return
 
-        header = f"{indent}{marker} {entry.id}  ({entry.category} · {entry.weight})"
+        meta = " · ".join(filter(None, [entry.category, entry.weight]))
+        header = f"{indent}{marker} {entry.id}  ({meta})"
         status_marker = _status_marker(entry.status)
         if status_marker:
             header += f"  {status_marker}"

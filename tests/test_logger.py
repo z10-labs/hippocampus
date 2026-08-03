@@ -99,6 +99,24 @@ def test_deferred_entries_append_rather_than_overwrite(root):
     assert "sharding" in content
 
 
+def test_deferred_entry_with_no_why_or_trigger_falls_back_to_placeholders(root):
+    path = write_deferred_entry(root, "multi-region, revisit post-MVP")
+    content = open(path).read()
+    assert "**Why deferred**: Not documented" in content
+    assert "**Review trigger**: Not specified" in content
+
+
+def test_deferred_entry_records_why_and_review_trigger_when_supplied(root):
+    path = write_deferred_entry(
+        root, "sharding, revisit at 10M rows",
+        why="Premature at current scale.",
+        review_trigger="user table crosses 10M rows.",
+    )
+    content = open(path).read()
+    assert "**Why deferred**: Premature at current scale." in content
+    assert "**Review trigger**: user table crosses 10M rows." in content
+
+
 def test_supersedes_flips_the_target_status_in_place(root):
     write_record(root, "0002", "Redis Streams", status="accepted")
 
