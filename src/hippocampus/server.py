@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -41,6 +42,19 @@ def _empty_state_message(root: Path) -> str:
     return "No decisions matched this query above the relevance threshold."
 
 
+def _status_marker(status: str) -> str:
+    """A marker for the id line so a dead decision can't be skimmed past as
+    if it were live. Superseded/deprecated records are never filtered out —
+    they stay part of the history — but must not read identically to one
+    that is still in force."""
+    if status in ("accepted", "proposed"):
+        return ""
+    m = re.search(r'superseded by\s+(DR-\d+)', status, re.I)
+    if m:
+        return f"⚠ SUPERSEDED BY {m.group(1).upper()}"
+    return "⚠ SUPERSEDED"
+
+
 # ---------------------------------------------------------------------------
 # hippocampus_query
 # ---------------------------------------------------------------------------
@@ -68,7 +82,11 @@ def hippocampus_query(query_text: str, top_n: int = 5) -> str:
             badge = f"[via {r.relationship_type} | {r.relevance_note}]"
 
         meta = " · ".join(filter(None, [r.category, r.weight]))
-        lines.append(f"{r.id}  {badge}  ({meta})")
+        header = f"{r.id}  {badge}  ({meta})"
+        status_marker = _status_marker(r.status)
+        if status_marker:
+            header += f"  {status_marker}"
+        lines.append(header)
         lines.append(f"  {r.title}")
 
         if r.why:
@@ -218,7 +236,6 @@ def hippocampus_log(
         )
 
     # Extract the new DR-NNNN from the written file path
-    import re
     fname = Path(file_path).name
     new_id_match = re.match(r'^(\d{4})-', fname)
     new_dr_id = f"DR-{new_id_match.group(1)}" if new_id_match else "DR-????"
@@ -296,7 +313,11 @@ def hippocampus_list(category: Optional[str] = None, weight: Optional[str] = Non
     lines = [header, "─" * 70]
 
     for e in sorted(entries, key=lambda x: x.id):
-        lines.append(f"{e.id}  ({e.category} · {e.weight})  {e.date}")
+        header = f"{e.id}  ({e.category} · {e.weight})  {e.date}"
+        status_marker = _status_marker(e.status)
+        if status_marker:
+            header += f"  {status_marker}"
+        lines.append(header)
         lines.append(f"  {e.title}")
         if e.why:
             short = e.why[:120] + "…" if len(e.why) > 120 else e.why
@@ -345,7 +366,11 @@ def hippocampus_chain(dr_id: str) -> str:
             lines.append(f"{indent}{marker} {target_id}  (not in index)")
             return
 
-        lines.append(f"{indent}{marker} {entry.id}  ({entry.category} · {entry.weight})")
+        header = f"{indent}{marker} {entry.id}  ({entry.category} · {entry.weight})"
+        status_marker = _status_marker(entry.status)
+        if status_marker:
+            header += f"  {status_marker}"
+        lines.append(header)
         lines.append(f"{indent}   {entry.title}")
         if entry.why:
             short = entry.why[:100] + "…" if len(entry.why) > 100 else entry.why

@@ -59,3 +59,4 @@ class RetrievalResult:
     weight: str
     depends_on: list[str]
     relationship_type: Optional[str] = None
+    status: str = "accepted"
